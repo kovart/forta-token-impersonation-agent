@@ -38,7 +38,7 @@ To do this, run `npm run fetch` command, passing the id of the desired network.
 For instance, this command will start scanning the blocks of the last 28 days on the Polygon network:
 
 ```shell script
-npm run fetch 137
+$ npm run fetch 137
 ```
  
 All tokens found will be written to the `chain-137.csv` file. Also, a state file `chain-137.fetcher.json` will be created, 
