@@ -11,7 +11,7 @@ but if it is not implemented, name is used.
 Also, the agent detects impersonating tokens through their traces in events, 
 which can be useful for chains that do not yet support tracing.
 
-## Supported token interfaces
+## Supported Token Interfaces
 
 - ERC20
 - ERC721
