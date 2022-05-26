@@ -14,6 +14,6 @@ WORKDIR /app
 COPY --from=builder /app/dist ./src
 COPY package*.json ./
 COPY networks.config.json ./
-COPY data ./
+COPY data ./data
 RUN npm ci --production
 CMD [ "npm", "run", "start:prod" ]
