@@ -3,7 +3,7 @@ import {
   Initialize,
   HandleTransaction,
   TransactionEvent,
-  getEthersBatchProvider,
+  getEthersProvider,
 } from 'forta-agent';
 import { providers } from 'ethers';
 import lodash from 'lodash';
@@ -16,11 +16,139 @@ import { Logger } from './logger';
 import { TokenStorage } from './storage';
 import { CreatedContract, DataContainer, TokenInterface } from './types';
 
+type AgentUtils = typeof agentUtils;
+
 const DATA_PATH = '../data';
 
 const data: DataContainer = {} as any;
 
-export const provideInitialize = (
+const handleTransactionWithTraces = async (
+  txEvent: TransactionEvent,
+  data: DataContainer,
+  utils: AgentUtils,
+): Promise<Finding[]> => {
+  const findings: Finding[] = [];
+
+  const { findCreatedContracts, identifyTokenInterface, getErc20TokenName, getErc20TokenSymbol } =
+    utils;
+
+  const createdContracts: CreatedContract[] = findCreatedContracts(txEvent);
+
+  for (const createdContract of createdContracts) {
+    const deployerAddress = txEvent.from;
+    const contractAddress = createdContract.address.toLowerCase();
+    const contractType = await identifyTokenInterface(contractAddress, data.provider, Logger.log);
+
+    if (!contractType) {
+      Logger.log('Found created contract without token interface:', contractAddress);
+      continue;
+    }
+
+    Logger.log(
+      `Found created contract with ${TokenInterface[contractType]} interface:`,
+      contractAddress,
+    );
+
+    const name =
+      (await getErc20TokenSymbol(contractAddress, data.provider)) ||
+      (await getErc20TokenName(contractAddress, data.provider));
+
+    if (!name) continue;
+
+    Logger.log('Token name:', name);
+
+    const legitAddress = data.legitTokenAddressesByName.get(name);
+
+    if (legitAddress) {
+      findings.push(
+        createImpersonatedTokenDeploymentFinding(
+          name,
+          deployerAddress,
+          legitAddress,
+          contractAddress,
+        ),
+      );
+    } else {
+      data.legitTokenAddressesByName.set(name, contractAddress);
+      await data.storage.append({
+        name,
+        type: contractType,
+        address: contractAddress,
+        legit: !legitAddress,
+      });
+    }
+  }
+
+  return findings;
+};
+
+const handleTransactionWithLogs = async (
+  txEvent: TransactionEvent,
+  data: DataContainer,
+  utils: AgentUtils,
+): Promise<Finding[]> => {
+  const findings: Finding[] = [];
+
+  const { filterTokenLogs, identifyTokenInterface, getErc20TokenName, getErc20TokenSymbol } = utils;
+
+  // Filter out logs related to ERC20, ERC721, and ERC1155 interfaces
+  const logs = filterTokenLogs(txEvent.logs);
+
+  if (logs.length === 0) return findings;
+
+  const contractAddresses = lodash
+    .uniqBy(logs, (log) => log.address)
+    .map((v) => v.address.toLowerCase())
+    .filter((address) => !data.tokensByAddress.has(address));
+
+  Logger.log(`Found ${logs.length} new contracts in the logs`);
+
+  for (let c = 0; c < contractAddresses.length; c++) {
+    const contractAddress = contractAddresses[c];
+
+    const logger = (...args: any) => Logger.log(`[${c + 1}/${contractAddresses.length}]`, ...args);
+
+    logger(`Contract:`, contractAddress);
+
+    const contractType = await identifyTokenInterface(contractAddress, data.provider, logger);
+
+    if (contractType) {
+      logger(`Token interface: ${TokenInterface[contractType]}`);
+    } else {
+      logger(`Cannot identify token interface`);
+      // Skip this log if token interface is not found
+      continue;
+    }
+
+    const name =
+      (await getErc20TokenSymbol(contractAddress, data.provider)) ||
+      (await getErc20TokenName(contractAddress, data.provider));
+
+    if (!name) continue;
+
+    logger('Token name:', name);
+
+    const legitAddress = data.legitTokenAddressesByName.get(name);
+
+    if (legitAddress) {
+      findings.push(createImpersonatedTokenFinding(name, legitAddress, contractAddress));
+    } else {
+      data.legitTokenAddressesByName.set(name, contractAddress);
+    }
+
+    data.tokensByAddress.set(contractAddress, { name, type: contractType });
+    await data.storage.append({
+      name,
+      type: contractType,
+      address: contractAddress,
+      legit: !legitAddress,
+    });
+  }
+
+  return findings;
+};
+
+const provideInitialize = (
   data: DataContainer,
   provider: providers.JsonRpcProvider,
 ): Initialize => {
@@ -29,10 +157,19 @@ export const provideInitialize = (
 
     data.provider = provider;
     data.storage = new TokenStorage(DATA_PATH, 'chain-' + network.chainId);
-    // all tokens
+    // all tokens (used when we cannot detect contract creation and have to check the logs for that)
     data.tokensByAddress = new Map(); // address -> token object
     // legitimate tokens
     data.legitTokenAddressesByName = new Map(); // name -> token address
+    // used to select a strategy for handling tokens
+    data.isTraceDataSupported = false;
+
+    try {
+      await data.provider.send('trace_transaction', [
+        '0x0000000000000000000000000000000000000000000000000000000000000000',
+      ]);
+      data.isTraceDataSupported = true;
+    } catch {}
 
     if (await data.storage.exists()) {
       const tokens = await data.storage.read();
@@ -42,10 +179,12 @@ export const provideInitialize = (
           data.legitTokenAddressesByName.set(token.name, token.address);
         }
 
-        data.tokensByAddress.set(token.address, {
-          type: token.type,
-          name: token.name,
-        });
+        if (!data.isTraceDataSupported) {
+          data.tokensByAddress.set(token.address, {
+            type: token.type,
+            name: token.name,
+          });
+        }
       }
     }
 
@@ -53,7 +192,7 @@ export const provideInitialize = (
   };
 };
 
-export const provideHandleTransaction = (
+const provideHandleTransaction = (
   data: DataContainer,
   utils: typeof agentUtils,
 ): HandleTransaction => {
@@ -64,129 +203,22 @@ export const provideHandleTransaction = (
 
     Logger.log('Transaction', txEvent.hash);
 
-    const {
-      findCreatedContracts,
-      identifyTokenInterface,
-      filterTokenLogs,
-      getErc20TokenName,
-      getErc20TokenSymbol,
-    } = utils;
+    const handleTransaction = data.isTraceDataSupported
+      ? handleTransactionWithTraces
+      : handleTransactionWithLogs;
 
-    const handleToken = async (
-      address: string,
-      type: TokenInterface,
-      onFinding: (name: string, legitimateAddress: string) => void,
-      logger: (...args: any[]) => void = Logger.log,
-    ) => {
-      // ERC20 and ERC721 with metadata should implement symbol and name functions.
-      // ERC1155 should not, but some contracts implement them too.
-
-      const name =
-        (await getErc20TokenSymbol(address, data.provider)) ||
-        (await getErc20TokenName(address, data.provider));
-
-      if (!name) return;
-
-      logger('Token name:', name);
-
-      const legitAddress = data.legitTokenAddressesByName.get(name);
-
-      if (legitAddress) {
-        onFinding(name, legitAddress);
-      } else {
-        data.legitTokenAddressesByName.set(name, address);
-      }
-
-      data.tokensByAddress.set(address, { name, type });
-      await data.storage.append({
-        type,
-        name,
-        address,
-        legit: !legitAddress,
-      });
-    };
-
-    const createdContracts: CreatedContract[] = findCreatedContracts(txEvent);
-
-    for (const createdContract of createdContracts) {
-      const deployerAddress = txEvent.from;
-      const contractAddress = createdContract.address.toLowerCase();
-      const contractType = await identifyTokenInterface(contractAddress, data.provider, Logger.log);
-
-      if (contractType) {
-        Logger.log(`Found created ${TokenInterface[contractType]} contract:`, contractAddress);
-
-        await handleToken(contractAddress, contractType, (name, legitimateAddress) => {
-          findings.push(
-            createImpersonatedTokenDeploymentFinding(
-              name,
-              deployerAddress,
-              legitimateAddress,
-              contractAddress,
-            ),
-          );
-        });
-      } else {
-        Logger.log('Found created contract without token interface:', contractAddress);
-      }
-    }
-
-    // We checked the created contracts using traces.
-    // Unfortunately, not all networks support trace mode,
-    // so we will try to find new tokens by their traces in transaction logs.
-
-    // Filter out logs related to ERC20, ERC721, and ERC1155 interfaces
-    const logs = filterTokenLogs(txEvent.logs);
-
-    if (logs.length === 0) return findings;
-
-    Logger.log(`Found ${logs.length} logs related to token events`);
-    Logger.log(`Found ${logs.length} unique contracts in the logs`);
-    const contractAddresses = lodash
-      .uniqBy(logs, (log) => log.address)
-      .map((v) => v.address.toLowerCase());
-
-    for (let c = 0; c < contractAddresses.length; c++) {
-      const contractAddress = contractAddresses[c];
-
-      const logger = (...args: any) => Logger.log(`[${c + 1}/${contractAddresses.length}]`, ...args);
-
-      logger(`Contract:`, contractAddress);
-
-      const token = data.tokensByAddress.get(contractAddress);
-      if (token) {
-        logger(`Known ${token.name} token (${TokenInterface[token.type]}), skip`);
-        continue;
-      }
-
-      const tokenType = await identifyTokenInterface(contractAddress, data.provider, logger);
-
-      if (tokenType) {
-        logger(`Identified interface: ${TokenInterface[tokenType]}`);
-      } else {
-        logger(`Cannot identify interface`);
-        // Skip this log if token interface is not found
-        continue;
-      }
-
-      await handleToken(
-        contractAddress,
-        tokenType,
-        (name, legitimateAddress) => {
-          findings.push(createImpersonatedTokenFinding(name, legitimateAddress, contractAddress));
-        },
-        logger,
-      );
-    }
+    findings.push(...(await handleTransaction(txEvent, data, utils)));
 
     return findings;
   };
 };
 
 export default {
-  initialize: provideInitialize(data, getEthersBatchProvider()),
+  initialize: provideInitialize(data, getEthersProvider()),
   handleTransaction: provideHandleTransaction(data, agentUtils),
 
   provideInitialize,
   provideHandleTransaction,
+  handleTransactionWithLogs,
+  handleTransactionWithTraces,
 };

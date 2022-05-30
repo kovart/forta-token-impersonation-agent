@@ -272,7 +272,7 @@ async function fetch(
 }
 
 async function initialize() {
-  const provider = new providers.JsonRpcBatchProvider(networksConfig[NETWORK]);
+  const provider = new providers.JsonRpcProvider(networksConfig[NETWORK]);
   const storage = new TokenStorage(DATA_PATH, 'chain-' + NETWORK);
   const endBlock = await provider.getBlockNumber();
   fetch(

@@ -1,13 +1,14 @@
 import { HandleTransaction, Network } from 'forta-agent';
 import { createAddress, TestTransactionEvent } from 'forta-agent-tools/lib/tests';
-import { provideHandleTransaction, provideInitialize } from './agent';
-import { Logger } from './logger';
+import agent from './agent';
 import { CreatedContract, DataContainer, Token, TokenInterface } from './types';
 import {
   createImpersonatedTokenDeploymentFinding,
   createImpersonatedTokenFinding,
 } from './findings';
 import { CsvRow } from './storage';
+
+const { provideInitialize, provideHandleTransaction } = agent;
 
 const mockStorage = {
   append: jest.fn(),
@@ -23,17 +24,18 @@ jest.mock('./storage', () => ({
 const Address = { create: (val: number | string) => createAddress('0x' + val) };
 
 describe('token impersonation agent', () => {
-  Logger.enabled = false;
-
   describe('initialize()', () => {
-    it('reads storage and updates map objects properly', async () => {
-      const mockProvider = {
-        getNetwork: jest.fn().mockResolvedValue({ chainId: Network.MAINNET }),
-      };
+    const mockProvider = {
+      getNetwork: jest.fn().mockResolvedValue({ chainId: Network.MAINNET }),
+      send: jest.fn(),
+    };
 
+    it('works correctly if storage is empty', async () => {
+      mockProvider.send.mockResolvedValue({});
       mockStorage.exists.mockResolvedValueOnce(false);
-      let data: DataContainer = {} as any;
-      let initialize = provideInitialize(data, mockProvider as any);
+
+      const data: DataContainer = {} as any;
+      const initialize = provideInitialize(data, mockProvider as any);
       await initialize();
 
       expect(data.provider).toStrictEqual(mockProvider);
@@ -41,19 +43,30 @@ describe('token impersonation agent', () => {
       expect(data.tokensByAddress.size).toStrictEqual(0);
       expect(data.legitTokenAddressesByName).toBeInstanceOf(Map);
       expect(data.legitTokenAddressesByName.size).toStrictEqual(0);
+      expect(data.isTraceDataSupported).toStrictEqual(true);
       expect(data.isInitialized).toStrictEqual(true);
+    });
 
-      // -----
-
+    it('works correctly if storage is not empty', async () => {
       const rows: CsvRow[] = [
-        { address: Address.create(1), name: 'TKN1', type: TokenInterface.ERC20Detailed, legit: true },
+        {
+          address: Address.create(1),
+          name: 'TKN1',
+          type: TokenInterface.ERC20Detailed,
+          legit: true,
+        },
         {
           address: Address.create(2),
           name: 'TKN2',
           type: TokenInterface.ERC721Metadata,
           legit: true,
         },
-        { address: Address.create(3), name: 'TKN3', type: TokenInterface.ERC20Detailed, legit: true },
+        {
+          address: Address.create(3),
+          name: 'TKN3',
+          type: TokenInterface.ERC20Detailed,
+          legit: true,
+        },
         // Due to fetcher optimizations, this one should replace the previous legit token (first item)
         {
           address: Address.create(4),
@@ -65,8 +78,25 @@ describe('token impersonation agent', () => {
         { address: Address.create(5), name: 'TKN2', type: TokenInterface.ERC1155, legit: false },
       ];
 
-      mockStorage.exists.mockResolvedValueOnce(true);
+      mockProvider.send.mockResolvedValueOnce({}); // simulate that trace data is supported
+      mockStorage.exists.mockResolvedValue(true);
       mockStorage.read.mockResolvedValue(rows);
+
+      let data: DataContainer = {} as any;
+      let initialize = provideInitialize(data, mockProvider as any);
+      await initialize();
+
+      expect(data.provider).toStrictEqual(mockProvider);
+      expect(data.tokensByAddress).toBeInstanceOf(Map);
+      expect(data.tokensByAddress.size).toStrictEqual(0);
+      expect(data.legitTokenAddressesByName).toBeInstanceOf(Map);
+      expect(data.legitTokenAddressesByName.size).toStrictEqual(3);
+      expect(data.isTraceDataSupported).toStrictEqual(true);
+      expect(data.isInitialized).toStrictEqual(true);
+
+      // ------
+
+      mockProvider.send.mockRejectedValueOnce('Error'); // simulate that trace data is not supported
 
       data = {} as any;
       initialize = provideInitialize(data, mockProvider as any);
@@ -77,6 +107,7 @@ describe('token impersonation agent', () => {
       expect(data.tokensByAddress.size).toStrictEqual(5);
       expect(data.legitTokenAddressesByName).toBeInstanceOf(Map);
       expect(data.legitTokenAddressesByName.size).toStrictEqual(3);
+      expect(data.isTraceDataSupported).toStrictEqual(false);
       expect(data.isInitialized).toStrictEqual(true);
 
       const expectedTokensEntries: [string, Token][] = [
@@ -115,6 +146,7 @@ describe('token impersonation agent', () => {
       provider: mockProvider,
       tokensByAddress: new Map<string, Token>(),
       legitTokenAddressesByName: new Map<string, string>(),
+      isTraceDataSupported: false,
       isInitialized: true,
     };
     const mockUtils = {
@@ -130,494 +162,636 @@ describe('token impersonation agent', () => {
     );
     let txEvent: TestTransactionEvent;
 
-    beforeEach(() => {
-      txEvent = new TestTransactionEvent();
-      Object.values(mockUtils).forEach((fn) => fn.mockClear());
-      Object.values(mockStorage).forEach((fn) => fn.mockClear());
-      mockData.tokensByAddress = new Map();
-      mockData.legitTokenAddressesByName = new Map();
-    });
+    const createCreatedContract = (
+      address: string,
+      deployer: string = Address.create('DEPLOYER'),
+    ): CreatedContract => ({ address, deployer });
 
-    it('returns empty findings if transaction is empty', async () => {
-      mockUtils.findCreatedContracts.mockReturnValueOnce([]);
-      mockUtils.filterTokenLogs.mockReturnValueOnce([]);
+    const createTokenLog = (contractAddress: string) => ({ address: contractAddress });
 
-      const findings = await handleTransaction(txEvent);
+    describe('trace data is supported', () => {
+      beforeEach(() => {
+        txEvent = new TestTransactionEvent();
+        Object.values(mockUtils).forEach((fn) => fn.mockClear());
+        Object.values(mockStorage).forEach((fn) => fn.mockClear());
+        mockData.tokensByAddress = new Map();
+        mockData.legitTokenAddressesByName = new Map();
+        mockData.isTraceDataSupported = true;
+      });
 
-      expect(mockUtils.filterTokenLogs).toBeCalledTimes(1);
-      expect(mockUtils.findCreatedContracts).toBeCalledTimes(1);
-      expect(mockUtils.identifyTokenInterface).toBeCalledTimes(0);
-      expect(findings).toStrictEqual([]);
-    });
+      it('returns empty findings if transaction is empty', async () => {
+        mockUtils.findCreatedContracts.mockReturnValueOnce([]);
 
-    it('returns empty findings if there is a created token in traces', async () => {
-      const createdContracts: CreatedContract[] = [
-        {
+        const findings = await handleTransaction(txEvent);
+
+        expect(mockUtils.findCreatedContracts).toBeCalledTimes(1);
+        expect(mockUtils.identifyTokenInterface).toBeCalledTimes(0);
+        expect(findings).toStrictEqual([]);
+      });
+
+      it('returns empty findings if there is a created token in traces', async () => {
+        const createdContracts: CreatedContract[] = [createCreatedContract(Address.create(1))];
+
+        mockUtils.findCreatedContracts.mockReturnValueOnce(createdContracts);
+        mockUtils.identifyTokenInterface.mockResolvedValueOnce(TokenInterface.ERC20Detailed);
+        mockUtils.getErc20TokenName.mockResolvedValueOnce(null);
+        mockUtils.getErc20TokenSymbol.mockResolvedValueOnce('SYMBOL');
+
+        const findings = await handleTransaction(txEvent);
+
+        expect(findings).toStrictEqual([]);
+      });
+
+      it('returns empty findings if contract has unknown interface', async () => {
+        const createdContracts: CreatedContract[] = [createCreatedContract(Address.create(1))];
+
+        mockUtils.findCreatedContracts.mockReturnValueOnce(createdContracts);
+        mockUtils.identifyTokenInterface.mockResolvedValue(null);
+        mockUtils.getErc20TokenName.mockResolvedValue(null);
+        mockUtils.getErc20TokenSymbol.mockResolvedValue('SYMBOL');
+
+        const findings = await handleTransaction(txEvent);
+
+        expect(findings).toStrictEqual([]);
+      });
+
+      it('returns empty findings if there is a token without symbol and name', async () => {
+        const createdContracts: CreatedContract[] = [createCreatedContract(Address.create(1))];
+
+        mockUtils.findCreatedContracts.mockReturnValueOnce(createdContracts);
+        mockUtils.identifyTokenInterface.mockResolvedValue(TokenInterface.ERC20Detailed);
+        mockUtils.getErc20TokenName.mockResolvedValue(null);
+        mockUtils.getErc20TokenSymbol.mockResolvedValue(null);
+
+        const findings = await handleTransaction(txEvent);
+
+        expect(findings).toStrictEqual([]);
+      });
+
+      it('returns a finding if there is creation of an impersonating token', async () => {
+        const senderAddress = createAddress('0xSENDER');
+
+        const legitToken = {
+          name: 'SYMBOL',
           address: Address.create(1),
-          deployer: Address.create(2),
-        },
-      ];
+          type: TokenInterface.ERC20Detailed,
+        };
+        const impersonatingToken = {
+          name: legitToken.name,
+          address: Address.create(2),
+          type: TokenInterface.ERC20Detailed,
+        };
 
-      mockUtils.findCreatedContracts.mockReturnValueOnce(createdContracts);
-      mockUtils.filterTokenLogs.mockReturnValueOnce([]);
-      mockUtils.identifyTokenInterface.mockResolvedValueOnce(TokenInterface.ERC20Detailed);
-      mockUtils.getErc20TokenName.mockResolvedValueOnce(null);
-      mockUtils.getErc20TokenSymbol.mockResolvedValueOnce('SYMBOL');
+        const createdContracts: CreatedContract[] = [
+          createCreatedContract(impersonatingToken.address),
+        ];
 
-      const findings = await handleTransaction(txEvent);
+        mockUtils.findCreatedContracts.mockReturnValueOnce(createdContracts);
+        mockUtils.identifyTokenInterface.mockResolvedValueOnce(impersonatingToken.type);
+        mockUtils.getErc20TokenName.mockResolvedValue(null);
+        mockUtils.getErc20TokenSymbol.mockResolvedValueOnce(impersonatingToken.name);
+        mockData.legitTokenAddressesByName.set(legitToken.name, legitToken.address);
+        txEvent.setFrom(senderAddress);
 
-      expect(findings).toStrictEqual([]);
-    });
+        const findings = await handleTransaction(txEvent);
 
-    it('returns empty findings if there is a new token in logs', async () => {
-      mockUtils.findCreatedContracts.mockReturnValueOnce([]);
-      mockUtils.filterTokenLogs.mockReturnValueOnce([{ address: Address.create(1) }]);
-      mockUtils.identifyTokenInterface.mockResolvedValueOnce(TokenInterface.ERC20Detailed);
-      mockUtils.getErc20TokenName.mockResolvedValue(null);
-      mockUtils.getErc20TokenSymbol.mockResolvedValue('SYMBOL');
-
-      const findings = await handleTransaction(txEvent);
-
-      expect(findings).toStrictEqual([]);
-    });
-
-    it('returns empty findings if logs contain same token multiple times', async () => {
-      mockUtils.findCreatedContracts.mockReturnValue([]);
-      mockUtils.filterTokenLogs.mockReturnValue([
-        { address: Address.create(1) },
-        { address: Address.create(2) },
-        { address: Address.create(1) },
-        { address: Address.create(1) },
-      ]);
-      mockUtils.identifyTokenInterface.mockResolvedValue(TokenInterface.ERC20Detailed);
-      mockUtils.getErc20TokenName.mockResolvedValue(null);
-      mockUtils.getErc20TokenSymbol.mockImplementation((address) => {
-        if (address === Address.create(1)) return 'SYMBOL1';
-        else if (address === Address.create(2)) return 'SYMBOL2';
-        else return null;
+        expect(findings).toStrictEqual([
+          createImpersonatedTokenDeploymentFinding(
+            legitToken.name,
+            senderAddress.toLowerCase(),
+            legitToken.address,
+            impersonatingToken.address,
+          ),
+        ]);
       });
 
-      const findings = await handleTransaction(txEvent);
+      it('returns a finding if symbol is missing but name is impersonating another token', async () => {
+        const senderAddress = Address.create('SENDER');
 
-      expect(findings).toStrictEqual([]);
-    });
+        const legitToken = {
+          name: 'SYMBOL',
+          address: Address.create(1),
+          type: TokenInterface.ERC20Detailed,
+        };
+        const impersonatingToken = {
+          name: legitToken.name,
+          address: Address.create(2),
+          type: TokenInterface.ERC20Detailed,
+        };
 
-    it('returns empty findings if there is a created token in traces and logs', async () => {
-      const createdContracts: CreatedContract[] = [
-        { address: Address.create(1), deployer: Address.create(2) },
-      ];
+        mockUtils.findCreatedContracts.mockReturnValueOnce([
+          createCreatedContract(impersonatingToken.address),
+        ]);
+        mockUtils.identifyTokenInterface.mockResolvedValue(impersonatingToken.type);
+        mockUtils.getErc20TokenName.mockResolvedValue(impersonatingToken.name);
+        mockUtils.getErc20TokenSymbol.mockResolvedValue(null);
+        mockData.legitTokenAddressesByName.set(legitToken.name, legitToken.address);
 
-      mockUtils.findCreatedContracts.mockReturnValueOnce(createdContracts);
-      mockUtils.filterTokenLogs.mockReturnValueOnce([{ address: createdContracts[0].address }]);
-      mockUtils.identifyTokenInterface.mockResolvedValue(TokenInterface.ERC20Detailed);
-      mockUtils.getErc20TokenName.mockResolvedValue(null);
-      mockUtils.getErc20TokenSymbol.mockImplementation((address) => {
-        if (address === Address.create(1)) return 'SYMBOL1';
-        else if (address === Address.create(2)) return 'SYMBOL2';
-        else return null;
+        txEvent.setFrom(senderAddress);
+
+        const findings = await handleTransaction(txEvent);
+
+        expect(findings).toStrictEqual([
+          createImpersonatedTokenDeploymentFinding(
+            legitToken.name,
+            senderAddress.toLowerCase(),
+            legitToken.address,
+            impersonatingToken.address,
+          ),
+        ]);
       });
 
-      const findings = await handleTransaction(txEvent);
+      it('returns multiple findings if there are impersonating tokens', async () => {
+        const senderAddress = Address.create('SENDER');
 
-      expect(findings).toStrictEqual([]);
-    });
+        const legitToken1 = {
+          name: 'SYMBOL1',
+          address: Address.create(1),
+          type: TokenInterface.ERC20Detailed,
+        };
+        const legitToken2 = {
+          name: 'SYMBOL2',
+          address: Address.create(2),
+          type: TokenInterface.ERC1155,
+        };
+        const legitToken3 = {
+          name: 'SYMBOL3',
+          address: Address.create(3),
+          type: TokenInterface.ERC1155,
+        };
+        const impersonatingToken1 = {
+          name: legitToken1.name,
+          address: Address.create(4),
+          type: TokenInterface.ERC20Detailed,
+        };
+        const impersonatingToken2 = {
+          name: legitToken2.name,
+          address: Address.create(5),
+          type: TokenInterface.ERC721Metadata,
+        };
 
-    it('returns empty findings if contract has unknown interface', async () => {
-      const createdContracts: CreatedContract[] = [
-        { address: Address.create(2), deployer: Address.create(3) },
-      ];
+        const map: { [address: string]: typeof legitToken1 } = {};
 
-      mockUtils.findCreatedContracts.mockReturnValueOnce(createdContracts);
-      mockUtils.filterTokenLogs.mockReturnValueOnce([{ address: Address.create(1) }]);
-      mockUtils.identifyTokenInterface.mockResolvedValue(null);
-      mockUtils.getErc20TokenName.mockResolvedValue(null);
-      mockUtils.getErc20TokenSymbol.mockResolvedValue('SYMBOL');
+        [legitToken1, legitToken2, legitToken3, impersonatingToken1, impersonatingToken2].forEach(
+          (token) => (map[token.address] = token),
+        );
 
-      const findings = await handleTransaction(txEvent);
+        mockUtils.identifyTokenInterface.mockImplementation((address: string) => map[address].type);
+        mockUtils.getErc20TokenSymbol.mockImplementation((address: string) => map[address].name);
+        mockUtils.getErc20TokenName.mockResolvedValue(null);
 
-      expect(findings).toStrictEqual([]);
-    });
+        mockUtils.findCreatedContracts.mockReturnValueOnce([
+          createCreatedContract(legitToken1.address),
+          createCreatedContract(legitToken2.address),
+          createCreatedContract(legitToken3.address),
+        ]);
 
-    it('returns empty findings if there is a token without symbol and name', async () => {
-      const createdContracts: CreatedContract[] = [
-        { address: Address.create(1), deployer: Address.create(2) },
-      ];
+        txEvent.setFrom(senderAddress);
 
-      mockUtils.findCreatedContracts.mockReturnValueOnce(createdContracts);
-      mockUtils.filterTokenLogs.mockReturnValueOnce([]);
-      mockUtils.identifyTokenInterface.mockResolvedValue(TokenInterface.ERC20Detailed);
-      mockUtils.getErc20TokenName.mockResolvedValue(null);
-      mockUtils.getErc20TokenSymbol.mockResolvedValue(null);
+        // handle legit tokens
+        let findings = await handleTransaction(txEvent);
 
-      let findings = await handleTransaction(txEvent);
+        expect(findings).toStrictEqual([]);
 
-      expect(findings).toStrictEqual([]);
+        mockUtils.findCreatedContracts.mockReturnValueOnce([
+          createTokenLog(impersonatingToken1.address),
+          createTokenLog(impersonatingToken2.address),
+        ]);
 
-      // ------------
+        findings = await handleTransaction(txEvent);
 
-      mockUtils.findCreatedContracts.mockReturnValueOnce([]);
-      mockUtils.filterTokenLogs.mockReturnValueOnce([{ address: Address.create(1) }]);
-      mockUtils.identifyTokenInterface.mockResolvedValue(TokenInterface.ERC20Detailed);
-      mockUtils.getErc20TokenName.mockResolvedValue(null);
-      mockUtils.getErc20TokenSymbol.mockResolvedValue(null);
-
-      findings = await handleTransaction(txEvent);
-
-      expect(findings).toStrictEqual([]);
-    });
-
-    it('returns empty findings if impersonating token is already known', async () => {
-      const SYMBOL = 'SYMBOL';
-
-      mockUtils.findCreatedContracts.mockReturnValueOnce([]);
-      mockUtils.filterTokenLogs.mockReturnValueOnce([{ address: Address.create(1) }]);
-      mockUtils.identifyTokenInterface.mockResolvedValue(TokenInterface.ERC20Detailed);
-      mockUtils.getErc20TokenName.mockResolvedValue(null);
-      mockUtils.getErc20TokenSymbol.mockResolvedValue(SYMBOL);
-      mockData.tokensByAddress.set(Address.create(1), { type: TokenInterface.ERC20Detailed, name: SYMBOL });
-      mockData.legitTokenAddressesByName.set(SYMBOL, Address.create(2));
-
-      const findings = await handleTransaction(txEvent);
-
-      expect(findings).toStrictEqual([]);
-    });
-
-    it('adds new tokens to the database', async () => {
-      const token1 = { symbol: 'SYMBOL', type: TokenInterface.ERC20Detailed, address: Address.create(1) };
-      const token2 = { name: 'Name', type: TokenInterface.ERC1155, address: Address.create(2) };
-      const impersonatingToken1 = {
-        symbol: token1.symbol,
-        type: TokenInterface.ERC721Metadata,
-        address: Address.create(3),
-      };
-
-      mockUtils.findCreatedContracts.mockReturnValueOnce([]);
-      mockUtils.filterTokenLogs.mockReturnValueOnce([
-        { address: token1.address },
-        { address: token2.address },
-        { address: impersonatingToken1.address },
-      ]);
-      mockUtils.identifyTokenInterface.mockImplementation((address: string) => {
-        if (address === token1.address) return token1.type;
-        else if (address === token2.address) return token2.type;
-        else if (address === impersonatingToken1.address) return impersonatingToken1.type;
-        else return null;
-      });
-      mockUtils.getErc20TokenName.mockImplementation((address: string) => {
-        if (address === token2.address) return token2.name;
-        else return null;
-      });
-      mockUtils.getErc20TokenSymbol.mockImplementation((address: string) => {
-        if (address === token1.address) return token1.symbol;
-        if (address === impersonatingToken1.address) return impersonatingToken1.symbol;
-        else return null;
+        expect(findings).toStrictEqual([
+          createImpersonatedTokenDeploymentFinding(
+            impersonatingToken1.name,
+            senderAddress.toLowerCase(),
+            legitToken1.address,
+            impersonatingToken1.address,
+          ),
+          createImpersonatedTokenDeploymentFinding(
+            impersonatingToken2.name,
+            senderAddress.toLowerCase(),
+            legitToken2.address,
+            impersonatingToken2.address,
+          ),
+        ]);
       });
 
-      await handleTransaction(txEvent);
+      it('adds new tokens to the database properly', async () => {
+        const legitToken1 = {
+          symbol: 'SYMBOL',
+          type: TokenInterface.ERC20Detailed,
+          address: Address.create(1),
+        };
+        const legitToken2 = {
+          name: 'Name',
+          type: TokenInterface.ERC1155,
+          address: Address.create(2),
+        };
+        const impersonatingToken1 = {
+          symbol: legitToken1.symbol,
+          type: TokenInterface.ERC721Metadata,
+          address: Address.create(3),
+        };
 
-      expect(mockData.legitTokenAddressesByName.get(token1.symbol)).toStrictEqual(token1.address);
-      expect(mockData.legitTokenAddressesByName.get(token2.name)).toStrictEqual(token2.address);
-      expect(mockData.tokensByAddress.get(token1.address)).toStrictEqual({
-        type: token1.type,
-        name: token1.symbol,
-      });
-      expect(mockData.tokensByAddress.get(token2.address)).toStrictEqual({
-        type: token2.type,
-        name: token2.name,
-      });
-      expect(mockData.tokensByAddress.get(impersonatingToken1.address)).toStrictEqual({
-        type: impersonatingToken1.type,
-        name: impersonatingToken1.symbol,
-      });
-      expect(mockStorage.append.mock.calls.length).toStrictEqual(3);
-      expect(mockStorage.append.mock.calls[0][0]).toStrictEqual({
-        address: token1.address,
-        name: token1.symbol,
-        type: token1.type,
-        legit: true,
-      });
-      expect(mockStorage.append.mock.calls[1][0]).toStrictEqual({
-        address: token2.address,
-        name: token2.name,
-        type: token2.type,
-        legit: true,
-      });
-      expect(mockStorage.append.mock.calls[2][0]).toStrictEqual({
-        address: impersonatingToken1.address,
-        name: impersonatingToken1.symbol,
-        type: impersonatingToken1.type,
-        legit: false,
-      });
-    });
+        mockUtils.findCreatedContracts.mockReturnValueOnce([
+          createCreatedContract(legitToken1.address),
+          createCreatedContract(legitToken2.address),
+          createCreatedContract(impersonatingToken1.address),
+        ]);
+        mockUtils.identifyTokenInterface.mockImplementation((address: string) => {
+          if (address === legitToken1.address) return legitToken1.type;
+          else if (address === legitToken2.address) return legitToken2.type;
+          else if (address === impersonatingToken1.address) return impersonatingToken1.type;
+          else return null;
+        });
+        mockUtils.getErc20TokenName.mockImplementation((address: string) => {
+          if (address === legitToken2.address) return legitToken2.name;
+          else return null;
+        });
+        mockUtils.getErc20TokenSymbol.mockImplementation((address: string) => {
+          if (address === legitToken1.address) return legitToken1.symbol;
+          if (address === impersonatingToken1.address) return impersonatingToken1.symbol;
+          else return null;
+        });
 
-    it('skips handling of cached tokens', async () => {
-      const token = { name: 'SYMBOL', address: Address.create(1), type: TokenInterface.ERC1155 };
+        await handleTransaction(txEvent);
 
-      mockUtils.findCreatedContracts.mockReturnValueOnce([]);
-      mockUtils.filterTokenLogs.mockReturnValueOnce([{ address: token.address }]);
-      mockUtils.identifyTokenInterface.mockResolvedValue(token.type);
-      mockUtils.getErc20TokenName.mockResolvedValue(null);
-      mockUtils.getErc20TokenSymbol.mockResolvedValue(token.name);
-      mockData.tokensByAddress.set(token.address, { type: token.type, name: token.name });
-
-      const findings = await handleTransaction(txEvent);
-
-      expect(findings).toStrictEqual([]);
-      expect(mockUtils.identifyTokenInterface).toBeCalledTimes(0);
-      expect(mockUtils.getErc20TokenName).toBeCalledTimes(0);
-      expect(mockUtils.getErc20TokenSymbol).toBeCalledTimes(0);
-    });
-
-    it('returns a finding if there is creation of an impersonating token', async () => {
-      const senderAddress = createAddress('0xSENDER');
-
-      const legitToken = { name: 'SYMBOL', address: Address.create(1), type: TokenInterface.ERC20Detailed };
-      const impersonatingToken = {
-        name: legitToken.name,
-        address: Address.create(2),
-        type: TokenInterface.ERC20Detailed,
-      };
-
-      const createdContracts: CreatedContract[] = [
-        { address: impersonatingToken.address, deployer: Address.create(3) },
-      ];
-
-      mockUtils.findCreatedContracts.mockReturnValueOnce(createdContracts);
-      mockUtils.filterTokenLogs.mockReturnValueOnce([]);
-      mockUtils.identifyTokenInterface.mockResolvedValueOnce(impersonatingToken.type);
-      mockUtils.getErc20TokenName.mockResolvedValue(null);
-      mockUtils.getErc20TokenSymbol.mockResolvedValueOnce(impersonatingToken.name);
-      mockData.legitTokenAddressesByName.set(legitToken.name, legitToken.address);
-      txEvent.setFrom(senderAddress);
-
-      const findings = await handleTransaction(txEvent);
-
-      expect(findings).toStrictEqual([
-        createImpersonatedTokenDeploymentFinding(
-          legitToken.name,
-          senderAddress.toLowerCase(),
-          legitToken.address,
-          impersonatingToken.address,
-        ),
-      ]);
-    });
-
-    it('returns a finding if there is an impersonating token in logs', async () => {
-      const legitToken = { name: 'SYMBOL', address: Address.create(1), type: TokenInterface.ERC20Detailed };
-      const impersonatingToken = {
-        name: legitToken.name,
-        address: Address.create(2),
-        type: TokenInterface.ERC20Detailed,
-      };
-
-      mockUtils.findCreatedContracts.mockReturnValueOnce([]);
-      mockUtils.filterTokenLogs.mockReturnValueOnce([{ address: impersonatingToken.address }]);
-      mockUtils.identifyTokenInterface.mockResolvedValueOnce(impersonatingToken.type);
-      mockUtils.getErc20TokenName.mockResolvedValue(null);
-      mockUtils.getErc20TokenSymbol.mockResolvedValueOnce(impersonatingToken.name);
-      mockData.legitTokenAddressesByName.set(legitToken.name, legitToken.address);
-
-      const findings = await handleTransaction(txEvent);
-
-      expect(findings).toStrictEqual([
-        createImpersonatedTokenFinding(
-          legitToken.name,
-          legitToken.address,
-          impersonatingToken.address,
-        ),
-      ]);
-    });
-
-    it('returns a finding if logs contain an impersonating token multiple times', async () => {
-      const legitToken = { name: 'SYMBOL', address: Address.create(1), type: TokenInterface.ERC20Detailed };
-      const impersonatingToken = {
-        name: legitToken.name,
-        address: Address.create(2),
-        type: TokenInterface.ERC20Detailed,
-      };
-
-      mockUtils.findCreatedContracts.mockReturnValueOnce([]);
-      mockUtils.filterTokenLogs.mockReturnValueOnce([
-        { address: impersonatingToken.address },
-        { address: impersonatingToken.address },
-      ]);
-      mockUtils.identifyTokenInterface.mockResolvedValue(impersonatingToken.type);
-      mockUtils.getErc20TokenName.mockResolvedValue(null);
-      mockUtils.getErc20TokenSymbol.mockResolvedValue(impersonatingToken.name);
-      mockData.legitTokenAddressesByName.set(legitToken.name, legitToken.address);
-
-      const findings = await handleTransaction(txEvent);
-
-      expect(findings).toStrictEqual([
-        createImpersonatedTokenFinding(
-          legitToken.name,
-          legitToken.address,
-          impersonatingToken.address,
-        ),
-      ]);
-    });
-
-    it('returns a finding if symbol is missing but name is impersonating another token', async () => {
-      const legitToken = { name: 'SYMBOL', address: Address.create(1), type: TokenInterface.ERC20Detailed };
-      const impersonatingToken = {
-        name: legitToken.name,
-        address: Address.create(2),
-        type: TokenInterface.ERC20Detailed,
-      };
-
-      mockUtils.findCreatedContracts.mockReturnValueOnce([]);
-      mockUtils.filterTokenLogs.mockReturnValueOnce([{ address: impersonatingToken.address }]);
-      mockUtils.identifyTokenInterface.mockResolvedValue(impersonatingToken.type);
-      mockUtils.getErc20TokenName.mockResolvedValue(impersonatingToken.name);
-      mockUtils.getErc20TokenSymbol.mockResolvedValue(null);
-      mockData.legitTokenAddressesByName.set(legitToken.name, legitToken.address);
-
-      const findings = await handleTransaction(txEvent);
-
-      expect(findings).toStrictEqual([
-        createImpersonatedTokenFinding(
-          legitToken.name,
-          legitToken.address,
-          impersonatingToken.address,
-        ),
-      ]);
-    });
-
-    it('returns a finding if there is creation of an impersonating token and logs contain its events', async () => {
-      const senderAddress = createAddress('0xSENDER');
-
-      const legitToken = { name: 'SYMBOL', address: Address.create(1), type: TokenInterface.ERC20Detailed };
-      const impersonatingToken = {
-        name: legitToken.name,
-        address: Address.create(2),
-        type: TokenInterface.ERC20Detailed,
-      };
-
-      const createdContracts: CreatedContract[] = [
-        { address: impersonatingToken.address, deployer: Address.create(3) },
-      ];
-
-      mockUtils.findCreatedContracts.mockReturnValueOnce(createdContracts);
-      mockUtils.filterTokenLogs.mockReturnValueOnce([{ address: impersonatingToken.address }]);
-      mockUtils.identifyTokenInterface.mockResolvedValue(impersonatingToken.type);
-      mockUtils.getErc20TokenName.mockResolvedValue(impersonatingToken.name);
-      mockUtils.getErc20TokenSymbol.mockResolvedValue(null);
-      mockData.legitTokenAddressesByName.set(legitToken.name, legitToken.address);
-      txEvent.setFrom(senderAddress);
-
-      const findings = await handleTransaction(txEvent);
-
-      expect(findings).toStrictEqual([
-        createImpersonatedTokenDeploymentFinding(
-          legitToken.name,
-          senderAddress.toLowerCase(),
-          legitToken.address,
-          impersonatingToken.address,
-        ),
-      ]);
-    });
-
-    it('returns multiple findings if there are impersonating tokens in traces and logs', async () => {
-      const senderAddress = Address.create('SENDER');
-
-      const legitToken1 = {
-        name: 'SYMBOL1',
-        address: Address.create(1),
-        type: TokenInterface.ERC20Detailed,
-      };
-      const legitToken2 = {
-        name: 'SYMBOL2',
-        address: Address.create(2),
-        type: TokenInterface.ERC1155,
-      };
-      const legitToken3 = {
-        name: 'SYMBOL3',
-        address: Address.create(3),
-        type: TokenInterface.ERC1155,
-      };
-      const legitToken4 = {
-        name: 'SYMBOL4',
-        address: Address.create(4),
-        type: TokenInterface.ERC20Detailed,
-      };
-      const impersonatingToken1 = {
-        name: legitToken1.name,
-        address: Address.create(5),
-        type: TokenInterface.ERC20Detailed,
-      };
-      const impersonatingToken2 = {
-        name: legitToken2.name,
-        address: Address.create(6),
-        type: TokenInterface.ERC721Metadata,
-      };
-      const impersonatingToken3 = {
-        name: legitToken3.name,
-        address: Address.create(7),
-        type: TokenInterface.ERC1155,
-      };
-
-      const map: { [address: string]: typeof legitToken1 } = {};
-
-      [
-        legitToken1,
-        legitToken2,
-        legitToken3,
-        legitToken4,
-        impersonatingToken1,
-        impersonatingToken2,
-        impersonatingToken3,
-      ].forEach((token) => (map[token.address] = token));
-
-      mockUtils.identifyTokenInterface.mockImplementation((address: string) => map[address].type);
-      mockUtils.getErc20TokenSymbol.mockImplementation((address: string) => map[address].name);
-      mockUtils.getErc20TokenName.mockResolvedValue(null);
-
-      let createdContracts: CreatedContract[] = [
-        { address: legitToken1.address, deployer: Address.create('DEPLOYER1') },
-        { address: legitToken2.address, deployer: Address.create('DEPLOYER2') },
-      ];
-
-      mockUtils.findCreatedContracts.mockReturnValueOnce(createdContracts);
-      mockUtils.filterTokenLogs.mockReturnValueOnce([
-        { address: legitToken3.address },
-        { address: legitToken4.address },
-      ]);
-
-      txEvent.setFrom(senderAddress);
-
-      let findings = await handleTransaction(txEvent);
-
-      // added legit tokens
-      expect(findings).toStrictEqual([]);
-
-      createdContracts = [
-        { address: impersonatingToken1.address, deployer: createAddress('0xDEPLOYER3') },
-        { address: impersonatingToken2.address, deployer: createAddress('0xDEPLOYER4') },
-      ];
-      mockUtils.findCreatedContracts.mockReturnValueOnce(createdContracts);
-      mockUtils.filterTokenLogs.mockReturnValueOnce([{ address: impersonatingToken3.address }]);
-
-      findings = await handleTransaction(txEvent);
-
-      expect(findings).toStrictEqual([
-        createImpersonatedTokenDeploymentFinding(
-          impersonatingToken1.name,
-          senderAddress.toLowerCase(),
+        expect(mockData.legitTokenAddressesByName.get(legitToken1.symbol)).toStrictEqual(
           legitToken1.address,
-          impersonatingToken1.address,
-        ),
-        createImpersonatedTokenDeploymentFinding(
-          impersonatingToken2.name,
-          senderAddress.toLowerCase(),
+        );
+        expect(mockData.legitTokenAddressesByName.get(legitToken2.name)).toStrictEqual(
           legitToken2.address,
-          impersonatingToken2.address,
-        ),
-        createImpersonatedTokenFinding(
-          impersonatingToken3.name,
-          legitToken3.address,
-          impersonatingToken3.address,
-        ),
-      ]);
+        );
+        expect(mockStorage.append.mock.calls.length).toStrictEqual(2);
+        expect(mockStorage.append.mock.calls[0][0]).toStrictEqual({
+          address: legitToken1.address,
+          name: legitToken1.symbol,
+          type: legitToken1.type,
+          legit: true,
+        });
+        expect(mockStorage.append.mock.calls[1][0]).toStrictEqual({
+          address: legitToken2.address,
+          name: legitToken2.name,
+          type: legitToken2.type,
+          legit: true,
+        });
+      });
+    });
+
+    describe('trace data is not supported', () => {
+      beforeEach(() => {
+        txEvent = new TestTransactionEvent();
+        Object.values(mockUtils).forEach((fn) => fn.mockClear());
+        Object.values(mockStorage).forEach((fn) => fn.mockClear());
+        mockData.tokensByAddress = new Map();
+        mockData.legitTokenAddressesByName = new Map();
+        mockData.isTraceDataSupported = false;
+      });
+
+      it('returns empty findings if transaction is empty', async () => {
+        mockUtils.filterTokenLogs.mockReturnValueOnce([]);
+
+        const findings = await handleTransaction(txEvent);
+
+        expect(mockUtils.filterTokenLogs).toBeCalledTimes(1);
+        expect(mockUtils.identifyTokenInterface).toBeCalledTimes(0);
+        expect(findings).toStrictEqual([]);
+      });
+
+      it('returns empty findings if there is a new token in logs', async () => {
+        mockUtils.filterTokenLogs.mockReturnValueOnce([createTokenLog(Address.create(1))]);
+        mockUtils.identifyTokenInterface.mockResolvedValueOnce(TokenInterface.ERC20Detailed);
+        mockUtils.getErc20TokenName.mockResolvedValue(null);
+        mockUtils.getErc20TokenSymbol.mockResolvedValue('SYMBOL');
+
+        const findings = await handleTransaction(txEvent);
+
+        expect(findings).toStrictEqual([]);
+      });
+
+      it('returns empty findings if logs contain same token multiple times', async () => {
+        mockUtils.filterTokenLogs.mockReturnValue([
+          createTokenLog(Address.create(1)),
+          createTokenLog(Address.create(2)),
+          createTokenLog(Address.create(2)),
+          createTokenLog(Address.create(1)),
+          createTokenLog(Address.create(1)),
+        ]);
+        mockUtils.identifyTokenInterface.mockResolvedValue(TokenInterface.ERC20Detailed);
+        mockUtils.getErc20TokenName.mockResolvedValue(null);
+        mockUtils.getErc20TokenSymbol.mockImplementation((address) => {
+          if (address === Address.create(1)) return 'SYMBOL1';
+          else if (address === Address.create(2)) return 'SYMBOL2';
+          else return null;
+        });
+
+        const findings = await handleTransaction(txEvent);
+
+        expect(findings).toStrictEqual([]);
+      });
+
+      it('returns empty findings if contract has unknown interface', async () => {
+        mockUtils.filterTokenLogs.mockReturnValueOnce([createTokenLog(Address.create(1))]);
+        mockUtils.identifyTokenInterface.mockResolvedValue(null);
+        mockUtils.getErc20TokenName.mockResolvedValue(null);
+        mockUtils.getErc20TokenSymbol.mockResolvedValue('SYMBOL');
+
+        const findings = await handleTransaction(txEvent);
+
+        expect(findings).toStrictEqual([]);
+      });
+
+      it('returns empty findings if there is a token without symbol and name', async () => {
+        mockUtils.filterTokenLogs.mockReturnValueOnce([createTokenLog(Address.create(1))]);
+        mockUtils.identifyTokenInterface.mockResolvedValue(TokenInterface.ERC20Detailed);
+        mockUtils.getErc20TokenName.mockResolvedValue(null);
+        mockUtils.getErc20TokenSymbol.mockResolvedValue(null);
+
+        const findings = await handleTransaction(txEvent);
+
+        expect(findings).toStrictEqual([]);
+      });
+
+      it('returns empty findings if impersonating token is already known', async () => {
+        const token = {
+          address: Address.create(1),
+          name: 'SYMBOL',
+          type: TokenInterface.ERC20Detailed,
+        };
+
+        mockUtils.filterTokenLogs.mockReturnValueOnce([createTokenLog(token.address)]);
+        mockUtils.identifyTokenInterface.mockResolvedValue(token.type);
+        mockUtils.getErc20TokenName.mockResolvedValue(null);
+        mockUtils.getErc20TokenSymbol.mockResolvedValue(token.name);
+        mockData.tokensByAddress.set(token.address, { type: token.type, name: token.name });
+
+        const findings = await handleTransaction(txEvent);
+
+        expect(findings).toStrictEqual([]);
+      });
+
+      it('skips handling of cached tokens', async () => {
+        const token = { name: 'SYMBOL', address: Address.create(1), type: TokenInterface.ERC1155 };
+
+        mockUtils.filterTokenLogs.mockReturnValueOnce([createTokenLog(token.address)]);
+        mockUtils.identifyTokenInterface.mockResolvedValue(token.type);
+        mockUtils.getErc20TokenName.mockResolvedValue(null);
+        mockUtils.getErc20TokenSymbol.mockResolvedValue(token.name);
+        mockData.tokensByAddress.set(token.address, { type: token.type, name: token.name });
+
+        const findings = await handleTransaction(txEvent);
+
+        expect(findings).toStrictEqual([]);
+        expect(mockUtils.filterTokenLogs).toBeCalledTimes(1);
+        expect(mockUtils.identifyTokenInterface).toBeCalledTimes(0);
+        expect(mockUtils.getErc20TokenName).toBeCalledTimes(0);
+        expect(mockUtils.getErc20TokenSymbol).toBeCalledTimes(0);
+      });
+
+      it('returns a finding if there is an impersonating token in logs', async () => {
+        const legitToken = {
+          name: 'SYMBOL',
+          address: Address.create(1),
+          type: TokenInterface.ERC20Detailed,
+        };
+        const impersonatingToken = {
+          name: legitToken.name,
+          address: Address.create(2),
+          type: TokenInterface.ERC20Detailed,
+        };
+
+        mockUtils.filterTokenLogs.mockReturnValueOnce([createTokenLog(impersonatingToken.address)]);
+        mockUtils.identifyTokenInterface.mockResolvedValueOnce(impersonatingToken.type);
+        mockUtils.getErc20TokenName.mockResolvedValue(null);
+        mockUtils.getErc20TokenSymbol.mockResolvedValueOnce(impersonatingToken.name);
+        mockData.legitTokenAddressesByName.set(legitToken.name, legitToken.address);
+
+        const findings = await handleTransaction(txEvent);
+
+        expect(findings).toStrictEqual([
+          createImpersonatedTokenFinding(
+            legitToken.name,
+            legitToken.address,
+            impersonatingToken.address,
+          ),
+        ]);
+      });
+
+      it('returns a finding if logs repeatedly contain an impersonating token', async () => {
+        const legitToken = {
+          name: 'SYMBOL1',
+          address: Address.create(1),
+          type: TokenInterface.ERC20Detailed,
+        };
+        const impersonatingToken = {
+          name: legitToken.name,
+          address: Address.create(2),
+          type: TokenInterface.ERC20Detailed,
+        };
+
+        mockUtils.filterTokenLogs.mockReturnValueOnce([
+          createTokenLog(impersonatingToken.address),
+          createTokenLog(Address.create(3)),
+          createTokenLog(impersonatingToken.address),
+        ]);
+        mockUtils.identifyTokenInterface.mockResolvedValue(impersonatingToken.type);
+        mockUtils.getErc20TokenName.mockResolvedValue(null);
+        mockUtils.getErc20TokenSymbol.mockImplementation((address) =>
+          address === impersonatingToken.address ? impersonatingToken.name : 'SYMBOL2',
+        );
+        mockData.legitTokenAddressesByName.set(legitToken.name, legitToken.address);
+
+        const findings = await handleTransaction(txEvent);
+
+        expect(findings).toStrictEqual([
+          createImpersonatedTokenFinding(
+            legitToken.name,
+            legitToken.address,
+            impersonatingToken.address,
+          ),
+        ]);
+      });
+
+      it('returns a finding if symbol is missing but name is impersonating another token', async () => {
+        const legitToken = {
+          name: 'SYMBOL',
+          address: Address.create(1),
+          type: TokenInterface.ERC20Detailed,
+        };
+        const impersonatingToken = {
+          name: legitToken.name,
+          address: Address.create(2),
+          type: TokenInterface.ERC20Detailed,
+        };
+
+        mockUtils.filterTokenLogs.mockReturnValueOnce([createTokenLog(impersonatingToken.address)]);
+        mockUtils.identifyTokenInterface.mockResolvedValue(impersonatingToken.type);
+        mockUtils.getErc20TokenName.mockResolvedValue(impersonatingToken.name);
+        mockUtils.getErc20TokenSymbol.mockResolvedValue(null);
+        mockData.legitTokenAddressesByName.set(legitToken.name, legitToken.address);
+
+        const findings = await handleTransaction(txEvent);
+
+        expect(findings).toStrictEqual([
+          createImpersonatedTokenFinding(
+            legitToken.name,
+            legitToken.address,
+            impersonatingToken.address,
+          ),
+        ]);
+      });
+
+      it('returns multiple findings if there are multiple impersonating tokens', async () => {
+        const senderAddress = Address.create('SENDER');
+
+        const legitToken1 = {
+          name: 'SYMBOL1',
+          address: Address.create(1),
+          type: TokenInterface.ERC20Detailed,
+        };
+        const legitToken2 = {
+          name: 'SYMBOL2',
+          address: Address.create(2),
+          type: TokenInterface.ERC1155,
+        };
+        const legitToken3 = {
+          name: 'SYMBOL3',
+          address: Address.create(3),
+          type: TokenInterface.ERC1155,
+        };
+        const impersonatingToken1 = {
+          name: legitToken1.name,
+          address: Address.create(4),
+          type: TokenInterface.ERC20Detailed,
+        };
+        const impersonatingToken2 = {
+          name: legitToken2.name,
+          address: Address.create(5),
+          type: TokenInterface.ERC721Metadata,
+        };
+
+        const map: { [address: string]: typeof legitToken1 } = {};
+
+        [legitToken1, legitToken2, legitToken3, impersonatingToken1, impersonatingToken2].forEach(
+          (token) => (map[token.address] = token),
+        );
+
+        mockUtils.identifyTokenInterface.mockImplementation((address: string) => map[address].type);
+        mockUtils.getErc20TokenSymbol.mockImplementation((address: string) => map[address].name);
+        mockUtils.getErc20TokenName.mockResolvedValue(null);
+
+        mockUtils.filterTokenLogs.mockReturnValueOnce([
+          createTokenLog(legitToken1.address),
+          createTokenLog(legitToken2.address),
+          createTokenLog(legitToken3.address),
+        ]);
+
+        txEvent.setFrom(senderAddress);
+
+        // handle legit tokens
+        let findings = await handleTransaction(txEvent);
+
+        expect(findings).toStrictEqual([]);
+
+        mockUtils.filterTokenLogs.mockReturnValueOnce([
+          createTokenLog(impersonatingToken1.address),
+          createTokenLog(impersonatingToken2.address),
+        ]);
+
+        findings = await handleTransaction(txEvent);
+
+        expect(findings).toStrictEqual([
+          createImpersonatedTokenFinding(
+            impersonatingToken1.name,
+            legitToken1.address,
+            impersonatingToken1.address,
+          ),
+          createImpersonatedTokenFinding(
+            impersonatingToken2.name,
+            legitToken2.address,
+            impersonatingToken2.address,
+          ),
+        ]);
+      });
+
+      it('adds new tokens to the database properly', async () => {
+        const legitToken1 = {
+          symbol: 'SYMBOL',
+          type: TokenInterface.ERC20Detailed,
+          address: Address.create(1),
+        };
+        const legitToken2 = {
+          name: 'Name',
+          type: TokenInterface.ERC1155,
+          address: Address.create(2),
+        };
+        const impersonatingToken1 = {
+          symbol: legitToken1.symbol,
+          type: TokenInterface.ERC721Metadata,
+          address: Address.create(3),
+        };
+
+        mockUtils.filterTokenLogs.mockReturnValueOnce([
+          createTokenLog(legitToken1.address),
+          createTokenLog(legitToken2.address),
+          createTokenLog(impersonatingToken1.address),
+        ]);
+        mockUtils.identifyTokenInterface.mockImplementation((address: string) => {
+          if (address === legitToken1.address) return legitToken1.type;
+          else if (address === legitToken2.address) return legitToken2.type;
+          else if (address === impersonatingToken1.address) return impersonatingToken1.type;
+          else return null;
+        });
+        mockUtils.getErc20TokenName.mockImplementation((address: string) => {
+          if (address === legitToken2.address) return legitToken2.name;
+          else return null;
+        });
+        mockUtils.getErc20TokenSymbol.mockImplementation((address: string) => {
+          if (address === legitToken1.address) return legitToken1.symbol;
+          if (address === impersonatingToken1.address) return impersonatingToken1.symbol;
+          else return null;
+        });
+
+        await handleTransaction(txEvent);
+
+        expect(mockData.legitTokenAddressesByName.get(legitToken1.symbol)).toStrictEqual(
+          legitToken1.address,
+        );
+        expect(mockData.legitTokenAddressesByName.get(legitToken2.name)).toStrictEqual(
+          legitToken2.address,
+        );
+        expect(mockData.tokensByAddress.get(legitToken1.address)).toStrictEqual({
+          type: legitToken1.type,
+          name: legitToken1.symbol,
+        });
+        expect(mockData.tokensByAddress.get(legitToken2.address)).toStrictEqual({
+          type: legitToken2.type,
+          name: legitToken2.name,
+        });
+        expect(mockData.tokensByAddress.get(impersonatingToken1.address)).toStrictEqual({
+          type: impersonatingToken1.type,
+          name: impersonatingToken1.symbol,
+        });
+        expect(mockStorage.append.mock.calls.length).toStrictEqual(3);
+        expect(mockStorage.append.mock.calls[0][0]).toStrictEqual({
+          address: legitToken1.address,
+          name: legitToken1.symbol,
+          type: legitToken1.type,
+          legit: true,
+        });
+        expect(mockStorage.append.mock.calls[1][0]).toStrictEqual({
+          address: legitToken2.address,
+          name: legitToken2.name,
+          type: legitToken2.type,
+          legit: true,
+        });
+        expect(mockStorage.append.mock.calls[2][0]).toStrictEqual({
+          address: impersonatingToken1.address,
+          name: impersonatingToken1.symbol,
+          type: impersonatingToken1.type,
+          legit: false,
+        });
+      });
     });
   });
 });

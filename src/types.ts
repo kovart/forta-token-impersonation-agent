@@ -22,5 +22,6 @@ export type DataContainer = {
   provider: providers.JsonRpcProvider;
   tokensByAddress: Map<string, Token>;
   legitTokenAddressesByName: Map<string, string>;
+  isTraceDataSupported: boolean;
   isInitialized: boolean;
 };
