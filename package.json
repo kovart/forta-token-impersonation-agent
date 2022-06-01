@@ -2,6 +2,10 @@
   "name": "forta-token-impersonation-agent",
   "version": "0.0.2",
   "description": "This agent scans the creation of new contacts and alerts if it detects the creation of a token with an existing symbol or name.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kovart/forta-token-impersonation-agent"
+  },
   "chainIds": [
     1,
     137,
