@@ -29,6 +29,7 @@
     "fetch": "tsc && cross-env DEBUG=1 node ./dist/fetcher.js"
   },
   "dependencies": {
+    "dayjs": "^1.11.2",
     "ethers": "^5.6.6",
     "fast-csv": "^4.3.6",
     "forta-agent": "^0.1.6",
