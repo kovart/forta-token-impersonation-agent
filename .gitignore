@@ -3,3 +3,5 @@
 node_modules
 dist
 forta.config.json
+data/*.fetcher.json
+dune-utils
