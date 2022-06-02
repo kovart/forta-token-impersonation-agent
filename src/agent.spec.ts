@@ -27,15 +27,45 @@ describe('token impersonation agent', () => {
   describe('initialize()', () => {
     const mockProvider = {
       getNetwork: jest.fn().mockResolvedValue({ chainId: Network.MAINNET }),
-      send: jest.fn(),
     };
 
-    it('works correctly if storage is empty', async () => {
-      mockProvider.send.mockResolvedValue({});
-      mockStorage.exists.mockResolvedValueOnce(false);
+    const rows: CsvRow[] = [
+      {
+        address: Address.create(1),
+        name: 'TKN1',
+        type: TokenInterface.ERC20Detailed,
+        legit: true,
+      },
+      {
+        address: Address.create(2),
+        name: 'TKN2',
+        type: TokenInterface.ERC721Metadata,
+        legit: true,
+      },
+      {
+        address: Address.create(3),
+        name: 'TKN3',
+        type: TokenInterface.ERC20Detailed,
+        legit: true,
+      },
+      // Due to fetcher optimizations, this one should replace the previous legit token (first item)
+      {
+        address: Address.create(4),
+        name: 'TKN1',
+        type: TokenInterface.ERC721Metadata,
+        legit: true,
+      },
+      // Should be cached, but not legit
+      { address: Address.create(5), name: 'TKN2', type: TokenInterface.ERC1155, legit: false },
+    ];
 
+    it('initializes correctly if storage is empty', async () => {
+      mockStorage.exists.mockResolvedValueOnce(false);
       const data: DataContainer = {} as any;
-      const initialize = provideInitialize(data, mockProvider as any);
+      const chainId = Network.MAINNET;
+      const traceableNetworksMap = { [chainId]: true };
+      mockProvider.getNetwork.mockResolvedValue({ chainId });
+      const initialize = provideInitialize(data, mockProvider as any, traceableNetworksMap);
       await initialize();
 
       expect(data.provider).toStrictEqual(mockProvider);
@@ -47,43 +77,16 @@ describe('token impersonation agent', () => {
       expect(data.isInitialized).toStrictEqual(true);
     });
 
-    it('works correctly if storage is not empty', async () => {
-      const rows: CsvRow[] = [
-        {
-          address: Address.create(1),
-          name: 'TKN1',
-          type: TokenInterface.ERC20Detailed,
-          legit: true,
-        },
-        {
-          address: Address.create(2),
-          name: 'TKN2',
-          type: TokenInterface.ERC721Metadata,
-          legit: true,
-        },
-        {
-          address: Address.create(3),
-          name: 'TKN3',
-          type: TokenInterface.ERC20Detailed,
-          legit: true,
-        },
-        // Due to fetcher optimizations, this one should replace the previous legit token (first item)
-        {
-          address: Address.create(4),
-          name: 'TKN1',
-          type: TokenInterface.ERC721Metadata,
-          legit: true,
-        },
-        // Should be cached, but not legit
-        { address: Address.create(5), name: 'TKN2', type: TokenInterface.ERC1155, legit: false },
-      ];
+    it('initializes correctly if Trace API is supported', async () => {
+      const chainId = Network.MAINNET;
+      const traceableNetworksMap = { [chainId]: true };
 
-      mockProvider.send.mockResolvedValueOnce({}); // simulate that trace data is supported
+      mockProvider.getNetwork.mockResolvedValue({ chainId });
       mockStorage.exists.mockResolvedValue(true);
       mockStorage.read.mockResolvedValue(rows);
 
-      let data: DataContainer = {} as any;
-      let initialize = provideInitialize(data, mockProvider as any);
+      const data: DataContainer = {} as any;
+      const initialize = provideInitialize(data, mockProvider as any, traceableNetworksMap);
       await initialize();
 
       expect(data.provider).toStrictEqual(mockProvider);
@@ -93,13 +96,17 @@ describe('token impersonation agent', () => {
       expect(data.legitTokenAddressesByName.size).toStrictEqual(3);
       expect(data.isTraceDataSupported).toStrictEqual(true);
       expect(data.isInitialized).toStrictEqual(true);
+    });
 
-      // ------
+    it('initializes correctly if Trace API is not supported', async () => {
+      const chainId = Network.MAINNET;
+      const traceableNetworksMap = { [chainId]: false };
+      mockProvider.getNetwork.mockResolvedValue({ chainId });
+      mockStorage.exists.mockResolvedValue(true);
+      mockStorage.read.mockResolvedValue(rows);
 
-      mockProvider.send.mockRejectedValueOnce('Error'); // simulate that trace data is not supported
-
-      data = {} as any;
-      initialize = provideInitialize(data, mockProvider as any);
+      const data = {} as any;
+      const initialize = provideInitialize(data, mockProvider as any, traceableNetworksMap);
       await initialize();
 
       expect(data.provider).toStrictEqual(mockProvider);

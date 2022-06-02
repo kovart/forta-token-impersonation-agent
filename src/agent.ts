@@ -4,6 +4,7 @@ import {
   HandleTransaction,
   TransactionEvent,
   getEthersProvider,
+  Network,
 } from 'forta-agent';
 import { providers } from 'ethers';
 import lodash from 'lodash';
@@ -19,6 +20,9 @@ import { CreatedContract, DataContainer, TokenInterface } from './types';
 type AgentUtils = typeof agentUtils;
 
 const DATA_PATH = '../data';
+const TRACE_API_SUPPORT: { [network: number]: boolean } = {
+  [Network.MAINNET]: true,
+};
 
 const data: DataContainer = {} as any;
 
@@ -151,6 +155,7 @@ const handleTransactionWithLogs = async (
 const provideInitialize = (
   data: DataContainer,
   provider: providers.JsonRpcProvider,
+  traceableNetworksMap: typeof TRACE_API_SUPPORT,
 ): Initialize => {
   return async () => {
     const network = await provider.getNetwork();
@@ -162,14 +167,7 @@ const provideInitialize = (
     // legitimate tokens
     data.legitTokenAddressesByName = new Map(); // name -> token address
     // used to select a strategy for handling tokens
-    data.isTraceDataSupported = false;
-
-    try {
-      await data.provider.send('trace_transaction', [
-        '0x0000000000000000000000000000000000000000000000000000000000000000',
-      ]);
-      data.isTraceDataSupported = true;
-    } catch {}
+    data.isTraceDataSupported = traceableNetworksMap[network.chainId] || false;
 
     if (await data.storage.exists()) {
       const tokens = await data.storage.read();
@@ -214,7 +212,7 @@ const provideHandleTransaction = (
 };
 
 export default {
-  initialize: provideInitialize(data, getEthersProvider()),
+  initialize: provideInitialize(data, getEthersProvider(), TRACE_API_SUPPORT),
   handleTransaction: provideHandleTransaction(data, agentUtils),
 
   provideInitialize,
