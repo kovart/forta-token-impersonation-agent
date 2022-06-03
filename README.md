@@ -11,7 +11,7 @@ but if it is not implemented, the name is used.
 Depending on the [Trace API](https://openethereum.github.io/JSONRPC-trace-module) support, 
 the agent chooses a token detection strategy. 
 If the network supports the API, then the agent looks for created contacts through traces;
-if it does not, it searches for logs related to token events and if it finds an event of an unknown contract, it checks it.
+if it does not, it searches for logs related to token events and if it finds the event of an unknown contract, it checks it.
 
 ## Supported Token Interfaces
 
