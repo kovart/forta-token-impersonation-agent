@@ -2,9 +2,9 @@ import { providers } from 'ethers';
 import { TokenStorage } from './storage';
 
 export enum TokenInterface {
-  ERC20Detailed = 1,
-  ERC721Metadata,
-  ERC1155,
+  ERC20Detailed = 20,
+  ERC721Metadata = 721,
+  ERC1155 = 1155,
 }
 
 export type CreatedContract = {
@@ -13,15 +13,20 @@ export type CreatedContract = {
 };
 
 export type Token = {
-  name: string;
+  name: string | null;
+  symbol: string | null;
   type: TokenInterface;
+  deployer: string;
+  address: string;
 };
 
 export type DataContainer = {
   storage: TokenStorage;
   provider: providers.JsonRpcProvider;
-  tokensByAddress: Map<string, Token>;
-  legitTokenAddressesByName: Map<string, string>;
-  isTraceDataSupported: boolean;
+  tokensByHash: Map<string, Token>;
+  exclusions: {
+    name?: string;
+    symbol?: string;
+  }[];
   isInitialized: boolean;
 };

@@ -1,0 +1,7 @@
+{
+  "exclude": [
+    {
+      "symbol": "UNI-V2"
+    }
+  ]
+}

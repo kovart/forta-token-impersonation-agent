@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 const ENABLED = process.env.DEBUG === '1';
 
 export class Logger {

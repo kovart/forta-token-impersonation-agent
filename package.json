@@ -1,25 +1,20 @@
 {
   "name": "forta-token-impersonation-agent",
-  "version": "0.0.2",
-  "description": "This agent scans the creation of new contacts and alerts if it detects the creation of a token with an existing symbol or name.",
+  "version": "0.0.3",
+  "description": "This agent detects creation of an impersonating token",
   "repository": {
     "type": "git",
     "url": "https://github.com/kovart/forta-token-impersonation-agent"
   },
   "chainIds": [
-    1,
-    137,
-    56,
-    43114,
-    42161,
-    10,
-    250
+    1
   ],
   "scripts": {
     "build": "tsc",
     "start": "npm run start:dev",
     "start:dev": "cross-env DEBUG=1 nodemon --watch src --watch forta.config.json -e js,ts,json  --exec \"npm run build && forta-agent run\"",
     "start:prod": "forta-agent run --prod",
+    "start:docker": "docker run --rm -it $(docker build -q .)",
     "tx": "npm run build && forta-agent run --tx",
     "block": "npm run build && forta-agent run --block",
     "range": "npm run build && forta-agent run --range",
@@ -30,25 +25,35 @@
     "enable": "forta-agent enable",
     "keyfile": "forta-agent keyfile",
     "test": "jest",
-    "fetch": "tsc && cross-env DEBUG=1 node ./dist/fetcher.js"
+    "lint": "eslint src/",
+    "fetch:auto": "tsc && cross-env DEBUG=1 node ./dist/tools/auto-fetcher.js",
+    "fetch:list": "tsc && cross-env DEBUG=1 node ./dist/tools/list-fetcher.js",
+    "prepare": "husky install"
   },
   "dependencies": {
+    "axios": "^0.27.2",
     "dayjs": "^1.11.2",
     "ethers": "^5.6.6",
     "fast-csv": "^4.3.6",
     "forta-agent": "^0.1.6",
-    "forta-agent-tools": "^2.0.7",
     "lodash": "^4.17.21"
   },
   "devDependencies": {
+    "@types/async": "^3.2.15",
     "@types/jest": "^27.0.1",
     "@types/lodash": "^4.14.182",
     "@types/nodemon": "^1.19.0",
+    "@typescript-eslint/eslint-plugin": "^5.29.0",
     "cross-env": "^7.0.3",
+    "eslint": "^8.18.0",
+    "eslint-config-prettier": "^8.5.0",
+    "forta-agent-tools": "^2.0.7",
+    "husky": "^8.0.1",
     "jest": "^27.0.6",
+    "node-html-parser": "^5.3.3",
     "nodemon": "^2.0.8",
-    "prettier": "^2.6.2",
+    "prettier": "^2.7.1",
     "ts-jest": "^27.0.3",
-    "typescript": "^4.3.4"
+    "typescript": "^4.7.4"
   }
 }

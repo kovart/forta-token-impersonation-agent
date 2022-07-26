@@ -1,30 +1,13 @@
-import { Log, TransactionEvent } from 'forta-agent';
-import { ethers, Contract, providers, utils } from 'ethers';
-import { CreatedContract, TokenInterface } from './types';
-import Erc20Abi from './abi/erc20.json';
-import Erc165Abi from './abi/erc165.json';
-import Erc721Abi from './abi/erc721.json';
-import Erc1155Abi from './abi/erc1155.json';
-
-export const erc20Iface = new utils.Interface(Erc20Abi);
-export const erc721Iface = new utils.Interface(Erc721Abi);
-export const erc1155Iface = new utils.Interface(Erc1155Abi);
-
-export const interfaceIdsMap = {
-  [TokenInterface.ERC20Detailed]: '0x36372b07',
-  [TokenInterface.ERC721Metadata]: '0x5b5e139f',
-  [TokenInterface.ERC1155]: '0xd9b67a26',
-};
-
-export const eventNamesByTopic = {
-  [erc20Iface.getEventTopic('Transfer')]: 'Transfer', // erc20 and erc721 have same topic
-  [erc20Iface.getEventTopic('Approval')]: 'Approval', // erc20 and erc721 have same topic
-  [erc721Iface.getEventTopic('ApprovalForAll')]: 'ApprovalForAll',
-  [erc1155Iface.getEventTopic('TransferSingle')]: 'TransferSingle',
-  [erc1155Iface.getEventTopic('TransferBatch')]: 'TransferBatch',
-  [erc1155Iface.getEventTopic('ApprovalForAll')]: 'ApprovalForAll',
-  [erc1155Iface.getEventTopic('URI')]: 'URI',
-};
+import { TransactionEvent } from 'forta-agent';
+import { Contract, ethers, providers, utils } from 'ethers';
+import { CreatedContract, Token, TokenInterface } from './types';
+import {
+  erc1155Iface,
+  erc165Iface,
+  erc20Iface,
+  erc721Iface,
+  INTERFACE_ID_BY_TYPE,
+} from './contants';
 
 export function findCreatedContracts(txEvent: TransactionEvent): CreatedContract[] {
   const createdContracts: CreatedContract[] = [];
@@ -61,13 +44,7 @@ export function findCreatedContracts(txEvent: TransactionEvent): CreatedContract
   return createdContracts;
 }
 
-export function filterTokenLogs(logs: Log[]) {
-  const eventTopics = Object.keys(eventNamesByTopic);
-
-  return logs.filter((l) => l.topics.find((t) => eventTopics.includes(t)));
-}
-
-export function isCodeCompatible(
+function isCodeCompatible(
   code: string,
   iface: utils.Interface,
   items: { functions?: string[]; events?: string[] },
@@ -89,8 +66,7 @@ export async function identifyTokenInterface(
 
   logger('Trying to identify interface with the ERC165');
 
-  const iface = new utils.Interface(Erc165Abi);
-  const erc165Contract = new Contract(contractAddress, iface, provider);
+  const erc165Contract = new Contract(contractAddress, erc165Iface, provider);
 
   try {
     const tokenInterface = (
@@ -98,7 +74,9 @@ export async function identifyTokenInterface(
         [TokenInterface.ERC20Detailed, TokenInterface.ERC721Metadata, TokenInterface.ERC1155].map(
           async (tokenInterface) => ({
             tokenInterface: tokenInterface,
-            isSupported: await erc165Contract.supportsInterface(interfaceIdsMap[tokenInterface]),
+            isSupported: await erc165Contract.supportsInterface(
+              INTERFACE_ID_BY_TYPE[tokenInterface],
+            ),
           }),
         ),
       )
@@ -217,4 +195,10 @@ export async function getErc20TokenName(
   } catch {}
 
   return null;
+}
+
+export function getTokenHash(token: Token): string {
+  return [token.symbol?.toLowerCase(), token.name?.toLowerCase(), token.type]
+    .filter((v) => !!v)
+    .join('.');
 }
