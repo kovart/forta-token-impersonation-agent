@@ -1,4 +1,4 @@
-import { Finding, FindingSeverity, FindingType } from 'forta-agent';
+import { EntityType, Finding, FindingSeverity, FindingType, LabelType } from 'forta-agent';
 import { Token } from './types';
 
 export const createImpersonatedTokenFinding = (newToken: Token, oldToken: Token) => {
@@ -21,6 +21,29 @@ export const createImpersonatedTokenFinding = (newToken: Token, oldToken: Token)
     type: FindingType.Suspicious,
     severity: FindingSeverity.Medium,
     addresses: [newToken.deployer, oldToken.deployer, newToken.address, oldToken.address],
+    labels: [
+      {
+        entityType: EntityType.Address,
+        labelType: LabelType.Victim,
+        entity: oldToken.address,
+        confidence: 0.5,
+        customValue: '',
+      },
+      {
+        entityType: EntityType.Address,
+        labelType: LabelType.Scam,
+        entity: newToken.address,
+        confidence: 0.6,
+        customValue: '',
+      },
+      {
+        entityType: EntityType.Address,
+        labelType: LabelType.Attacker,
+        entity: newToken.deployer,
+        confidence: 0.5,
+        customValue: '',
+      },
+    ],
     metadata: {},
   });
 };
