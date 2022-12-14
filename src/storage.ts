@@ -154,7 +154,7 @@ export class TokenStorage extends BaseStorage<Token, Token> {
         deployer: row.deployer,
       }),
     );
-    this.stateFileFullPath = path.resolve(distPath, fileName, '.auto-fetcher.json');
+    this.stateFileFullPath = path.resolve(distPath, fileName + '.auto-fetcher.json');
   }
 
   public async readState(): Promise<StorageState | null> {
