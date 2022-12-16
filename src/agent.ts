@@ -10,7 +10,7 @@ import { Logger } from './logger';
 import { TokenStorage } from './storage';
 import { CreatedContract, DataContainer, Token, TokenInterface } from './types';
 import { createImpersonatedTokenFinding } from './findings';
-import { DATA_PATH, TRACE_API_SUPPORT } from './contants';
+import { DATA_PATH } from './contants';
 
 const data: DataContainer = {} as any;
 const botConfig = require('../bot-config.json');
@@ -19,14 +19,10 @@ const provideInitialize = (
   data: DataContainer,
   utils: Pick<typeof botUtils, 'getTokenHash'>,
   config: typeof botConfig,
-  traceableNetworksMap: typeof TRACE_API_SUPPORT,
 ): Initialize => {
   return async () => {
     data.provider = getEthersProvider();
     const network = await data.provider.getNetwork();
-
-    if (!traceableNetworksMap[network.chainId])
-      throw new Error('Trace data is not supported: ' + network.name);
 
     data.storage = new TokenStorage(DATA_PATH, 'chain-' + network.chainId);
     data.exclusions = config.exclude || [];
@@ -58,6 +54,7 @@ const provideHandleTransaction = (
       getErc20TokenName,
       getErc20TokenSymbol,
       getTokenHash,
+      isScamToken,
     } = utils;
 
     const createdContracts: CreatedContract[] = findCreatedContracts(txEvent);
@@ -82,6 +79,14 @@ const provideHandleTransaction = (
 
       if (!name && !symbol) continue;
 
+      const token: Token = {
+        name,
+        symbol,
+        type: contractType,
+        address: contractAddress,
+        deployer: deployerAddress,
+      };
+
       // check if we should ignore this token
       let isIgnored = false;
       for (const exclusion of data.exclusions) {
@@ -90,15 +95,11 @@ const provideHandleTransaction = (
         if (isIgnored) break;
       }
 
-      if (isIgnored) continue;
+      if (!isIgnored) {
+        isIgnored = isScamToken(symbol, name);
+      }
 
-      const token: Token = {
-        name,
-        symbol,
-        type: contractType,
-        address: contractAddress,
-        deployer: deployerAddress,
-      };
+      if (isIgnored) continue;
 
       const tokenHash = getTokenHash(token);
       const existingToken = data.tokensByHash.get(tokenHash);
@@ -120,7 +121,7 @@ const provideHandleTransaction = (
 };
 
 export default {
-  initialize: provideInitialize(data, botUtils, botConfig, TRACE_API_SUPPORT),
+  initialize: provideInitialize(data, botUtils, botConfig),
   handleTransaction: provideHandleTransaction(data, botUtils),
 
   provideInitialize,

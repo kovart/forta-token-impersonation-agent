@@ -3,11 +3,14 @@ import { Log, Network } from 'forta-agent';
 import { providers } from 'ethers';
 import { EventFilter } from '@ethersproject/contracts';
 import lodash from 'lodash';
+import { queue } from 'async';
 import {
   getErc20TokenName,
   getErc20TokenSymbol,
   getTokenHash,
   identifyTokenInterface,
+  isScamToken,
+  retry,
 } from '../utils';
 import { Token, TokenInterface } from '../types';
 import { TokenStorage } from '../storage';
@@ -57,30 +60,27 @@ async function getLogsNumber(
 ): Promise<number> {
   let counter = 0;
 
-  const requests = 5; // parallel requests
+  const requests = 10; // parallel requests
   const offset = 200; // logs per request
 
-  const steps: any[] = [];
+  const requestsQueue = queue<{ fromBlock: number; toBlock: number }>(async (step, callback) => {
+    const logs = (await retry(() => provider.getLogs({ ...filter, ...step })))
+      .map(() => null)
+      .flat();
+    counter += logs.length;
+    callback();
+  }, requests);
 
   let block = fromBlock;
   while (block < toBlock) {
-    steps.push({
+    requestsQueue.push({
       fromBlock: block,
       toBlock: Math.min(toBlock, block + offset),
     });
     block += offset;
   }
 
-  for (const stepsChunk of lodash.chunk(steps, requests)) {
-    const logs = (
-      await Promise.all(
-        stepsChunk.map(async (step: any) =>
-          (await provider.getLogs({ ...filter, ...step })).map(() => null),
-        ),
-      )
-    ).flat();
-    counter += logs.length;
-  }
+  await requestsQueue.drain();
 
   return counter;
 }
@@ -202,12 +202,18 @@ async function fetch(
 
           const name = await getErc20TokenName(contractAddress, provider);
           const symbol = await getErc20TokenSymbol(contractAddress, provider);
-          const deployer = await getTokenDeployer(contractAddress, NETWORK);
+
+          if (isScamToken(symbol, name)) {
+            progressLogger(`Symbol ${symbol}. Name: ${name} | Scam token, skip`);
+            continue;
+          }
 
           if (!name || !symbol) {
             progressLogger('Cannot get symbol and name');
             continue;
           }
+
+          const deployer = await getTokenDeployer(contractAddress, NETWORK);
 
           progressLogger(`Symbol ${symbol}. Name: ${name}. Deployer: ${deployer}.`);
 

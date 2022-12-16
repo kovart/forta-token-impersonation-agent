@@ -1,10 +1,17 @@
 /* eslint-disable no-console */
 import { providers } from 'ethers';
-import lodash from 'lodash';
+import { queue } from 'async';
 import { Token, TokenInterface } from '../types';
 import { BaseStorage, TokenStorage } from '../storage';
-import { getErc20TokenName, getErc20TokenSymbol, getTokenHash } from '../utils';
-import { getNetworkArgument, getTokenDeployer, retry } from './utils';
+import {
+  delay,
+  getErc20TokenName,
+  getErc20TokenSymbol,
+  getTokenHash,
+  isScamToken,
+  retry,
+} from '../utils';
+import { getNetworkArgument, getTokenDeployer } from './utils';
 import {
   DATA_PATH,
   getListFileName,
@@ -12,7 +19,6 @@ import {
   getTokensFileName,
   LIST_ADDRESS_KEY,
   NETWORK_CONFIG,
-  PARALLEL_REQUESTS,
 } from './contants';
 
 const NETWORK = getNetworkArgument();
@@ -104,73 +110,93 @@ async function fetch() {
   }
 
   console.log(`Fetching ${rows.length} tokens...`);
-  const chunks = lodash.chunk(rows, PARALLEL_REQUESTS);
 
-  for (let i = 0; i < chunks.length; i++) {
-    // parallel handing rows
-    const chunkRows = chunks[i];
+  let addressCounter = 0;
 
-    try {
-      await retry({
-        times: 15,
-        interval: 60 * 1000,
-        fn: async () => {
-          let finished = 0;
-          const chunkTokens: Token[] = [];
-          await Promise.all(
-            chunkRows.map(async (row) => {
-              const { type, address } = row;
+  const progress = (address: string, text: string) =>
+    `Processed [${addressCounter}/${rows.length}]` +
+    ` | Explorer queue [${offChainQueue.length()}] | ${address} | ${text}`;
 
-              // we can reiterate this address if some chunkRows is failed
-              // or a token implements multiple interfaces
-              if (
-                isFetchedByAddress.get(address) ||
-                chunkTokens.find((t) => t.address === address)
-              ) {
-                return;
-              }
+  type UnfinishedToken = Pick<Token, 'symbol' | 'name' | 'address' | 'type'>;
 
-              const name = await getErc20TokenName(address, provider);
-              const symbol = await getErc20TokenSymbol(address, provider);
+  const offChainQueue = queue<UnfinishedToken>(async (unfinishedToken, callback) => {
+    progress(unfinishedToken.address, 'Fetching deployer address');
 
-              const progress = () =>
-                `[${i + 1}/${chunks.length}][${finished + 1}/${chunkRows.length}] ${address} | `;
+    const deployer = await retry(() => getTokenDeployer(unfinishedToken.address, NETWORK), {
+      wait: 1000 * 30,
+    });
+    const token: Token = { ...unfinishedToken, deployer };
 
-              if (!name && !symbol) {
-                // self-destroyed or unknown token
-                console.log(progress() + `Symbol: ${symbol} | Name: ${name}`);
-                finished++;
-                return;
-              }
+    console.log(progress(unfinishedToken.address, `Fetched deployer address`));
 
-              const deployer = await getTokenDeployer(address, NETWORK);
-              const token: Token = { type, name, symbol, address, deployer };
-              const hash = getTokenHash(token);
+    const hash = getTokenHash(token);
+    tokensByHash.set(hash, token);
 
-              console.log(progress() + `Symbol: ${symbol} | Name: ${name} | Deployer: ${deployer}`);
+    await tokenStorage.append(token);
+    isFetchedByAddress.set(token.address, true);
 
-              if (tokensByHash.get(hash)) {
-                console.warn(progress() + 'Not a unique hash, skip');
-                finished++;
-                return;
-              }
+    addressCounter++;
 
-              chunkTokens.push(token);
-              tokensByHash.set(hash, token);
-              finished++;
-            }),
-          );
+    // 250ms pause
+    await delay(250);
+    callback();
+  }, 1);
 
-          if (chunkTokens.length > 0) {
-            await tokenStorage.append(chunkTokens);
-            chunkTokens.forEach((t) => isFetchedByAddress.set(t.address, true));
-          }
-        },
-      });
-    } catch {
-      break;
+  const onChainQueue = queue<PreparedStorageRow>(async (row, callback) => {
+    const { type, address } = row;
+
+    console.log(progress(address, 'Processing'));
+
+    if (isFetchedByAddress.get(address)) {
+      console.log(progress(address, `Handled address, skip`));
+      addressCounter++;
+      return callback();
     }
-  }
+
+    const [name, symbol] = await Promise.all([
+      retry(() => getErc20TokenName(address, provider)),
+      retry(() => getErc20TokenSymbol(address, provider)),
+    ]);
+
+    if (!name && !symbol) {
+      // self-destroyed or unknown token
+      console.log(progress(address, `Symbol: ${symbol} | Name: ${name}`));
+      addressCounter++;
+      return callback();
+    }
+
+    if (isScamToken(symbol, name)) {
+      console.warn(progress(address, `Scam token, skip: ${[symbol, name].join(', ')}`));
+      addressCounter++;
+      return callback();
+    }
+
+    const hash = getTokenHash({ type, symbol, name });
+
+    if (tokensByHash.get(hash)) {
+      console.warn(progress(address, 'Not a unique hash, skip'));
+      addressCounter++;
+      return callback();
+    }
+
+    offChainQueue.push({
+      type,
+      name,
+      symbol,
+      address,
+    });
+
+    callback();
+  }, 10);
+
+  onChainQueue.error(console.error);
+  offChainQueue.error(console.error);
+
+  onChainQueue.push(rows);
+
+  console.log('waiting for draining...');
+  await onChainQueue.drain();
+  await offChainQueue.drain();
 
   console.log('Finished');
 }

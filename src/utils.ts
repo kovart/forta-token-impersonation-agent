@@ -12,9 +12,10 @@ import {
 export function findCreatedContracts(txEvent: TransactionEvent): CreatedContract[] {
   const createdContracts: CreatedContract[] = [];
 
+  const sender = txEvent.from.toLowerCase();
+
   for (const trace of txEvent.traces) {
     if (trace.type === 'create') {
-      const sender = txEvent.from.toLowerCase();
       const deployer = trace.action.from.toLowerCase();
 
       // Parity/OpenEthereum trace format contains created address
@@ -39,6 +40,16 @@ export function findCreatedContracts(txEvent: TransactionEvent): CreatedContract
         });
       }
     }
+  }
+
+  if (!txEvent.to && txEvent.traces.length === 0) {
+    createdContracts.push({
+      deployer: sender,
+      address: ethers.utils.getContractAddress({
+        from: txEvent.from,
+        nonce: txEvent.transaction.nonce,
+      }),
+    });
   }
 
   return createdContracts;
@@ -197,8 +208,38 @@ export async function getErc20TokenName(
   return null;
 }
 
-export function getTokenHash(token: Token): string {
+export function getTokenHash(token: Pick<Token, 'name' | 'symbol' | 'type'>): string {
   return [token.symbol?.toLowerCase(), token.name?.toLowerCase(), token.type]
     .filter((v) => !!v)
     .join('.');
+}
+
+export function isScamToken(name: string | null, symbol: string | null): boolean {
+  const scamTokenRegexes = [/\$\s/, /visit/i, /\sbonus\s/i, /\sclaim\s/i, /claim at/i];
+
+  return !!scamTokenRegexes.find((r) => r.test(name || '') || r.test(symbol || ''));
+}
+
+export const delay = (ms: number): Promise<unknown> => new Promise((res) => setTimeout(res, ms));
+
+export async function retry<T>(
+  fn: () => Promise<T>,
+  opts?: { attempts?: number; wait?: number },
+): Promise<T> {
+  const { attempts = 3, wait = 5 * 1000 } = opts || {};
+  let attempt = 1;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      return await fn();
+    } catch (e: any) {
+      // eslint-disable-next-line no-console
+      console.error('attempt #' + attempt, e?.message || e?.details || e?.code || e);
+      if (attempt > attempts) {
+        return e;
+      }
+      attempt++;
+      await delay(wait);
+    }
+  }
 }

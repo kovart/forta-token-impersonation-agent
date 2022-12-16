@@ -62,7 +62,6 @@ describe('token impersonation agent', () => {
   };
 
   describe('initialize()', () => {
-    let mockTraceableNetworkMap: { [network: number]: boolean };
     let mockData: DataContainer;
     let mockBotConfig: { exclude?: any[] } = {};
     let initialize: Initialize;
@@ -70,18 +69,7 @@ describe('token impersonation agent', () => {
     beforeEach(() => {
       mockData = {} as any;
       mockBotConfig = {} as any;
-      mockTraceableNetworkMap = {};
-      initialize = provideInitialize(mockData, agentUtils, mockBotConfig, mockTraceableNetworkMap);
-    });
-
-    it("throws an error if network doesn't support Trace API", async () => {
-      mockTraceableNetworkMap[4321] = true;
-      mockEthersProvider.getNetwork.mockResolvedValue({
-        name: 'Test network',
-        chainId: 1234,
-      });
-
-      await expect(initialize()).rejects.toThrowError();
+      initialize = provideInitialize(mockData, agentUtils, mockBotConfig);
     });
 
     it('initializes properly', async () => {
@@ -95,7 +83,6 @@ describe('token impersonation agent', () => {
         createToken({ type: TokenInterface.ERC20Detailed, name: 'TKN', symbol: 'SYMBOL' }),
       ];
 
-      mockTraceableNetworkMap[network] = true;
       mockEthersProvider.getNetwork.mockResolvedValue({
         name: Network[network],
         chainId: network,

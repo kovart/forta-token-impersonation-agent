@@ -16,10 +16,13 @@ Tokens deployed from the same address are ignored.
 
 ## Supported Chains
 
-The agent should work with all networks that support the [Trace API](https://openethereum.github.io/JSONRPC-trace-module).
-Forta currently only supports tracing on Mainnet.
-
-- Mainnet (1)
+- Ethereum (1)
+- BSC (56)
+- Polygon (137)
+- Arbitrum (42161)
+- Optimism (10)
+- Fantom (250)
+- Avalanche (43114)
 
 ## Configuration
 

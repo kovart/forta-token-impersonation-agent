@@ -1,13 +1,19 @@
 {
   "name": "forta-token-impersonation-agent",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "This agent detects creation of an impersonating token",
   "repository": {
     "type": "git",
     "url": "https://github.com/kovart/forta-token-impersonation-agent"
   },
   "chainIds": [
-    1
+    1,
+    10,
+    56,
+    137,
+    250,
+    42161,
+    43114
   ],
   "scripts": {
     "build": "tsc",
@@ -31,6 +37,7 @@
     "prepare": "husky install"
   },
   "dependencies": {
+    "async": "^3.2.4",
     "axios": "^0.27.2",
     "dayjs": "^1.11.2",
     "ethers": "^5.6.6",
@@ -39,7 +46,7 @@
     "lodash": "^4.17.21"
   },
   "devDependencies": {
-    "@types/async": "^3.2.15",
+    "@types/async": "^3.2.16",
     "@types/jest": "^27.0.1",
     "@types/lodash": "^4.14.182",
     "@types/nodemon": "^1.19.0",
