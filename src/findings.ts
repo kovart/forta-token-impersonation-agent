@@ -1,7 +1,11 @@
-import { EntityType, Finding, FindingSeverity, FindingType, LabelType } from 'forta-agent';
+import { EntityType, Finding, FindingSeverity, FindingType } from 'forta-agent';
 import { Token } from './types';
 
-export const createImpersonatedTokenFinding = (newToken: Token, oldToken: Token) => {
+export const createImpersonatedTokenFinding = (
+  newToken: Token,
+  oldToken: Token,
+  anomalyScore: number,
+) => {
   const writeName = (token: Token) => {
     let str = '';
 
@@ -24,26 +28,35 @@ export const createImpersonatedTokenFinding = (newToken: Token, oldToken: Token)
     labels: [
       {
         entityType: EntityType.Address,
-        labelType: LabelType.Victim,
+        label: 'victim',
+        entity: oldToken.deployer,
+        confidence: 0.5,
+        remove: false,
+      },
+      {
+        entityType: EntityType.Address,
+        label: 'victim',
         entity: oldToken.address,
         confidence: 0.5,
-        customValue: '',
+        remove: false,
       },
       {
         entityType: EntityType.Address,
-        labelType: LabelType.Scam,
+        label: 'scam',
         entity: newToken.address,
-        confidence: 0.6,
-        customValue: '',
+        confidence: 0.5,
+        remove: false,
       },
       {
         entityType: EntityType.Address,
-        labelType: LabelType.Attacker,
+        label: 'scammer',
         entity: newToken.deployer,
         confidence: 0.5,
-        customValue: '',
+        remove: false,
       },
     ],
-    metadata: {},
+    metadata: {
+      anomaly_score: String(anomalyScore),
+    },
   });
 };

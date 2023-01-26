@@ -11,20 +11,36 @@ import { TokenStorage } from './storage';
 import { CreatedContract, DataContainer, Token, TokenInterface } from './types';
 import { createImpersonatedTokenFinding } from './findings';
 import { DATA_PATH } from './contants';
+import { BotAnalytics, FortaBotStorage, InMemoryBotStorage } from 'forta-bot-analytics';
 
 const data: DataContainer = {} as any;
 const botConfig = require('../bot-config.json');
+const isDevelopment = process.env.NODE_ENV !== 'production';
 
 const provideInitialize = (
   data: DataContainer,
   utils: Pick<typeof botUtils, 'getTokenHash'>,
   config: typeof botConfig,
+  isDevelopment: boolean,
 ): Initialize => {
   return async () => {
     data.provider = getEthersProvider();
+
     const network = await data.provider.getNetwork();
 
+    data.network = network.chainId;
     data.storage = new TokenStorage(DATA_PATH, 'chain-' + network.chainId);
+    data.analytics = new BotAnalytics(
+      isDevelopment ? new InMemoryBotStorage(Logger.log) : new FortaBotStorage(Logger.log),
+      {
+        syncTimeout: 60 * 60, // 1h
+        maxSyncDelay: 14 * 24 * 60 * 60, // 14d
+        observableInterval: 2 * 24 * 60 * 60, // 2d
+        defaultAnomalyScore: config.defaultAnomalyScore,
+        logFn: Logger.log,
+      },
+    );
+
     data.exclusions = config.exclude || [];
     data.tokensByHash = new Map();
     if (await data.storage.exists()) {
@@ -48,6 +64,8 @@ const provideHandleTransaction = (
 
     const findings: Finding[] = [];
 
+    const { analytics } = data;
+
     const {
       findCreatedContracts,
       identifyTokenInterface,
@@ -56,6 +74,8 @@ const provideHandleTransaction = (
       getTokenHash,
       isScamToken,
     } = utils;
+
+    await analytics.sync(txEvent.timestamp);
 
     const createdContracts: CreatedContract[] = findCreatedContracts(txEvent);
 
@@ -68,6 +88,8 @@ const provideHandleTransaction = (
         Logger.log('Contract without token interface:', contractAddress);
         continue;
       }
+
+      analytics.incrementBotTriggers(txEvent.timestamp);
 
       const name = await getErc20TokenName(contractAddress, data.provider);
       const symbol = await getErc20TokenSymbol(contractAddress, data.provider);
@@ -109,7 +131,12 @@ const provideHandleTransaction = (
           Logger.log('Existing token was deployed from the same address:', existingToken.deployer);
           continue;
         }
-        findings.push(createImpersonatedTokenFinding(token, existingToken));
+
+        analytics.incrementAlertTriggers(txEvent.timestamp);
+
+        findings.push(
+          createImpersonatedTokenFinding(token, existingToken, analytics.getAnomalyScore()),
+        );
       } else {
         data.tokensByHash.set(tokenHash, token);
         await data.storage.append(token);
@@ -121,7 +148,7 @@ const provideHandleTransaction = (
 };
 
 export default {
-  initialize: provideInitialize(data, botUtils, botConfig),
+  initialize: provideInitialize(data, botUtils, botConfig, isDevelopment),
   handleTransaction: provideHandleTransaction(data, botUtils),
 
   provideInitialize,

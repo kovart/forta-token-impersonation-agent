@@ -1,4 +1,5 @@
 {
+  "defaultAnomalyScore": "0.015",
   "exclude": [
     {
       "symbol": "UNI-V2"

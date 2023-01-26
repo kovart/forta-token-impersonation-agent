@@ -1,3 +1,4 @@
+import { BotAnalytics } from 'forta-bot-analytics';
 import { HandleTransaction, Initialize, Network } from 'forta-agent';
 import { createAddress, TestTransactionEvent } from 'forta-agent-tools/lib/tests';
 import lodash from 'lodash';
@@ -69,7 +70,7 @@ describe('token impersonation agent', () => {
     beforeEach(() => {
       mockData = {} as any;
       mockBotConfig = {} as any;
-      initialize = provideInitialize(mockData, agentUtils, mockBotConfig);
+      initialize = provideInitialize(mockData, agentUtils, mockBotConfig, false);
     });
 
     it('initializes properly', async () => {
@@ -96,6 +97,9 @@ describe('token impersonation agent', () => {
       expect(mockData.isInitialized).toStrictEqual(true);
       expect(mockData.provider).toStrictEqual(mockEthersProvider);
       expect(mockData.storage).toStrictEqual(mockStorage);
+      expect(mockData.network).toStrictEqual(network);
+      expect(mockData.network).toStrictEqual(network);
+      expect(mockData.analytics).toBeInstanceOf(BotAnalytics);
       expect(mockData.exclusions).toStrictEqual(mockBotConfig.exclude);
       // without 2nd token
       expect(mockData.tokensByHash.size).toStrictEqual(tokens.length - 1);
@@ -110,15 +114,26 @@ describe('token impersonation agent', () => {
     let mockData: DataContainer;
     let mockTxEvent: TestTransactionEvent;
     let handleTransaction: HandleTransaction;
+    let mockBotAnalytics: jest.Mocked<BotAnalytics>;
     let mockAgentUtils: jest.MockedObject<typeof agentUtils>;
 
+    const mockAnomalyScore = 0.321;
+
     beforeEach(() => {
+      mockAgentUtils = {} as any;
+      mockBotAnalytics = {
+        sync: jest.fn(),
+        incrementBotTriggers: jest.fn(),
+        incrementAlertTriggers: jest.fn(),
+        getAnomalyScore: jest.fn().mockReturnValue(mockAnomalyScore),
+      } as any;
+
       mockData = {} as any;
       mockData.tokensByHash = new Map();
       mockData.storage = mockStorage as any;
+      mockData.analytics = mockBotAnalytics;
       mockData.exclusions = [];
       mockData.isInitialized = true;
-      mockAgentUtils = {} as any;
       Object.entries(agentUtils).forEach(([key, fn]) => {
         // @ts-ignore
         mockAgentUtils[key] = jest.fn().mockImplementation(fn);
@@ -314,7 +329,7 @@ describe('token impersonation agent', () => {
         expect.arrayContaining(
           impersonatingTokens.map((newToken, i) => {
             const oldToken = impersonatedTokens[i]!;
-            return createImpersonatedTokenFinding(newToken, oldToken);
+            return createImpersonatedTokenFinding(newToken, oldToken, mockAnomalyScore);
           }),
         ),
       );
@@ -326,6 +341,47 @@ describe('token impersonation agent', () => {
         expect(mockData.storage.append).toHaveBeenCalledWith(token);
         expect(mockData.tokensByHash.get(agentUtils.getTokenHash(token))).toStrictEqual(token);
       }
+    });
+
+    it('uses BotAnalytics properly', async () => {
+      await handleTransaction(mockTxEvent);
+
+      expect(mockBotAnalytics.sync).toBeCalledTimes(1);
+
+      mockBotAnalytics.sync.mockReset();
+
+      mockTest({
+        newTokens: [createToken({ type: TokenInterface.ERC20Detailed })],
+        contracts: [{ address: autoAddress(), deployer: autoAddress() }],
+      });
+
+      await handleTransaction(mockTxEvent);
+
+      expect(mockBotAnalytics.sync).toBeCalledTimes(1);
+      expect(mockBotAnalytics.incrementBotTriggers).toBeCalledTimes(1);
+      expect(mockBotAnalytics.incrementAlertTriggers).not.toBeCalled();
+
+      mockBotAnalytics.sync.mockReset();
+      mockBotAnalytics.incrementBotTriggers.mockReset();
+      mockBotAnalytics.incrementAlertTriggers.mockReset();
+
+      mockTest({
+        oldTokens: [
+          createToken({ name: 'TOKEN1', symbol: 'TKN1', type: TokenInterface.ERC20Detailed }),
+          createToken({ name: 'TOKEN2', symbol: 'TKN2', type: TokenInterface.ERC20Detailed }),
+        ],
+        newTokens: [
+          createToken({ name: 'TOKEN0', symbol: 'TKN0', type: TokenInterface.ERC20Detailed }),
+          createToken({ name: 'TOKEN1', symbol: 'TKN1', type: TokenInterface.ERC20Detailed }),
+          createToken({ name: 'TOKEN2', symbol: 'TKN2', type: TokenInterface.ERC20Detailed }),
+        ],
+      });
+
+      await handleTransaction(mockTxEvent);
+
+      expect(mockBotAnalytics.sync).toBeCalledTimes(1);
+      expect(mockBotAnalytics.incrementBotTriggers).toBeCalledTimes(3);
+      expect(mockBotAnalytics.incrementAlertTriggers).toBeCalledTimes(2);
     });
   });
 });

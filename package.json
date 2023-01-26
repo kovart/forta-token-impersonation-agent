@@ -1,6 +1,6 @@
 {
   "name": "forta-token-impersonation-agent",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "This agent detects creation of an impersonating token",
   "repository": {
     "type": "git",
@@ -42,8 +42,10 @@
     "dayjs": "^1.11.2",
     "ethers": "^5.6.6",
     "fast-csv": "^4.3.6",
-    "forta-agent": "^0.1.15",
-    "lodash": "^4.17.21"
+    "forta-agent": "^0.1.17",
+    "forta-bot-analytics": "^0.0.1",
+    "lodash": "^4.17.21",
+    "lru-cache": "^7.14.1"
   },
   "devDependencies": {
     "@types/async": "^3.2.16",

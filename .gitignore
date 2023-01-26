@@ -5,3 +5,4 @@ dist
 forta.config.json
 data/*.fetcher.json
 dune-utils
+.DS_Store
