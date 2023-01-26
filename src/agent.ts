@@ -36,7 +36,7 @@ const provideInitialize = (
         syncTimeout: 60 * 60, // 1h
         maxSyncDelay: 14 * 24 * 60 * 60, // 14d
         observableInterval: 2 * 24 * 60 * 60, // 2d
-        defaultAnomalyScore: config.defaultAnomalyScore,
+        defaultAnomalyScore: { [BotAnalytics.GeneralAlertId]: config.defaultAnomalyScore },
         logFn: Logger.log,
       },
     );
