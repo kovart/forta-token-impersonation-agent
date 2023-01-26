@@ -28,28 +28,28 @@ export const createImpersonatedTokenFinding = (
     labels: [
       {
         entityType: EntityType.Address,
-        label: 'victim',
+        label: 'Victim',
         entity: oldToken.deployer,
         confidence: 0.5,
         remove: false,
       },
       {
         entityType: EntityType.Address,
-        label: 'victim',
+        label: 'Victim',
         entity: oldToken.address,
         confidence: 0.5,
         remove: false,
       },
       {
         entityType: EntityType.Address,
-        label: 'scam',
+        label: 'Scam',
         entity: newToken.address,
         confidence: 0.5,
         remove: false,
       },
       {
         entityType: EntityType.Address,
-        label: 'scammer',
+        label: 'Scammer',
         entity: newToken.deployer,
         confidence: 0.5,
         remove: false,
