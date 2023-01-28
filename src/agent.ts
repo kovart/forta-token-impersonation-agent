@@ -33,6 +33,7 @@ const provideInitialize = (
     data.analytics = new BotAnalytics(
       isDevelopment ? new InMemoryBotStorage(Logger.log) : new FortaBotStorage(Logger.log),
       {
+        key: network.chainId.toString(),
         syncTimeout: 60 * 60, // 1h
         maxSyncDelay: 14 * 24 * 60 * 60, // 14d
         observableInterval: 2 * 24 * 60 * 60, // 2d

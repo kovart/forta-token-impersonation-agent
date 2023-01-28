@@ -1,6 +1,6 @@
 {
   "name": "forta-token-impersonation-agent",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "The bot detects creation of an impersonating token with an existing symbol or name. For example, the bot will detect when an attacker creates a copy of an existing APE token (ApeCoin), which will be used for subsequent scams.",
   "repository": {
     "type": "git",
@@ -43,7 +43,7 @@
     "ethers": "^5.6.6",
     "fast-csv": "^4.3.6",
     "forta-agent": "^0.1.17",
-    "forta-bot-analytics": "^0.0.1",
+    "forta-bot-analytics": "^0.0.2",
     "lodash": "^4.17.21",
     "lru-cache": "^7.14.1"
   },
