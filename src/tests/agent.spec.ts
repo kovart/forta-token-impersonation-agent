@@ -4,8 +4,9 @@ import { createAddress, TestTransactionEvent } from 'forta-agent-tools/lib/tests
 import lodash from 'lodash';
 import agent from '../agent';
 import * as agentUtils from '../utils';
-import { createImpersonatedTokenFinding } from '../findings';
+import { createFindingHighSeverity, createFindingMediumSeverity } from '../findings';
 import { CreatedContract, DataContainer, Token, TokenInterface } from '../types';
+import TokenProvider from '../token-provider';
 
 const { provideInitialize, provideHandleTransaction } = agent;
 
@@ -70,7 +71,7 @@ describe('token impersonation agent', () => {
     beforeEach(() => {
       mockData = {} as any;
       mockBotConfig = {} as any;
-      initialize = provideInitialize(mockData, agentUtils, mockBotConfig, false);
+      initialize = provideInitialize(mockData, [], agentUtils, mockBotConfig, false);
     });
 
     it('initializes properly', async () => {
@@ -99,6 +100,7 @@ describe('token impersonation agent', () => {
       expect(mockData.storage).toStrictEqual(mockStorage);
       expect(mockData.network).toStrictEqual(network);
       expect(mockData.network).toStrictEqual(network);
+      expect(mockData.tokenProvider).toBeInstanceOf(TokenProvider);
       expect(mockData.analytics).toBeInstanceOf(BotAnalytics);
       expect(mockData.exclusions).toStrictEqual(mockBotConfig.exclude);
       // without 2nd token
@@ -132,6 +134,7 @@ describe('token impersonation agent', () => {
       mockData.tokensByHash = new Map();
       mockData.storage = mockStorage as any;
       mockData.analytics = mockBotAnalytics;
+      mockData.tokenProvider = new TokenProvider([]);
       mockData.exclusions = [];
       mockData.isInitialized = true;
       Object.entries(agentUtils).forEach(([key, fn]) => {
@@ -329,7 +332,7 @@ describe('token impersonation agent', () => {
         expect.arrayContaining(
           impersonatingTokens.map((newToken, i) => {
             const oldToken = impersonatedTokens[i]!;
-            return createImpersonatedTokenFinding(newToken, oldToken, mockAnomalyScore);
+            return createFindingMediumSeverity(newToken, oldToken, mockAnomalyScore);
           }),
         ),
       );
@@ -341,6 +344,32 @@ describe('token impersonation agent', () => {
         expect(mockData.storage.append).toHaveBeenCalledWith(token);
         expect(mockData.tokensByHash.get(agentUtils.getTokenHash(token))).toStrictEqual(token);
       }
+    });
+
+    it('returns a finding with high severity if created token impersonates popular token', async () => {
+      const oldToken = createToken({
+        symbol: 'TKN',
+        name: 'Token',
+        type: TokenInterface.ERC20Detailed,
+      });
+      const newToken = createToken({
+        symbol: 'TKN',
+        name: 'Token',
+        type: TokenInterface.ERC20Detailed,
+      });
+
+      mockData.tokenProvider = new TokenProvider([oldToken]);
+
+      mockTest({
+        oldTokens: [oldToken],
+        newTokens: [newToken],
+      });
+
+      const findings = await handleTransaction(mockTxEvent);
+
+      expect(findings).toStrictEqual([
+        createFindingHighSeverity(newToken, oldToken, mockAnomalyScore),
+      ]);
     });
 
     it('uses BotAnalytics properly', async () => {

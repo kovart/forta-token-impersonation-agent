@@ -46,7 +46,9 @@ By default, the bot ignores the deployment of Uniswap tokens:
 
 - IMPERSONATED-TOKEN-DEPLOYMENT
   - Fired when someone deployed an impersonating token with a similar symbol, name and interface
-  - Severity is always set to "medium"
+  - Severity is:
+    - "high" when the token impersonates a popular token
+    - "medium" when the token impersonates a regular token
   - Type is always set to "suspicious"
 
 ## Test Data

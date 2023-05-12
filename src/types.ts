@@ -2,6 +2,7 @@ import { Network } from 'forta-agent';
 import { providers } from 'ethers';
 import { TokenStorage } from './storage';
 import { BotAnalytics } from 'forta-bot-analytics';
+import TokenProvider from "./token-provider";
 
 export enum TokenInterface {
   ERC20Detailed = 20,
@@ -25,6 +26,7 @@ export type Token = {
 export type DataContainer = {
   storage: TokenStorage;
   provider: providers.JsonRpcProvider;
+  tokenProvider: TokenProvider;
   analytics: BotAnalytics;
   tokensByHash: Map<string, Token>;
   exclusions: {

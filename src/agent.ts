@@ -5,20 +5,23 @@ import {
   Initialize,
   TransactionEvent,
 } from 'forta-agent';
+import { BotAnalytics, FortaBotStorage, InMemoryBotStorage } from 'forta-bot-analytics';
 import * as botUtils from './utils';
 import { Logger } from './logger';
 import { TokenStorage } from './storage';
 import { CreatedContract, DataContainer, Token, TokenInterface } from './types';
-import { createImpersonatedTokenFinding } from './findings';
+import TokenProvider from './token-provider';
+import { createFindingMediumSeverity, createFindingHighSeverity } from './findings';
 import { DATA_PATH } from './contants';
-import { BotAnalytics, FortaBotStorage, InMemoryBotStorage } from 'forta-bot-analytics';
 
 const data: DataContainer = {} as any;
 const botConfig = require('../bot-config.json');
+const popularTokens = require('../data/popular-tokens.json');
 const isDevelopment = process.env.NODE_ENV !== 'production';
 
 const provideInitialize = (
   data: DataContainer,
+  popularTokens: { symbol: string; name: string }[],
   utils: Pick<typeof botUtils, 'getTokenHash'>,
   config: typeof botConfig,
   isDevelopment: boolean,
@@ -29,6 +32,7 @@ const provideInitialize = (
     const network = await data.provider.getNetwork();
 
     data.network = network.chainId;
+    data.tokenProvider = new TokenProvider(popularTokens);
     data.storage = new TokenStorage(DATA_PATH, 'chain-' + network.chainId);
     data.analytics = new BotAnalytics(
       isDevelopment ? new InMemoryBotStorage(Logger.log) : new FortaBotStorage(Logger.log),
@@ -135,9 +139,15 @@ const provideHandleTransaction = (
 
         analytics.incrementAlertTriggers(txEvent.timestamp);
 
-        findings.push(
-          createImpersonatedTokenFinding(token, existingToken, analytics.getAnomalyScore()),
-        );
+        if (data.tokenProvider.isPopularToken(token)) {
+          findings.push(
+            createFindingHighSeverity(token, existingToken, analytics.getAnomalyScore()),
+          );
+        } else {
+          findings.push(
+            createFindingMediumSeverity(token, existingToken, analytics.getAnomalyScore()),
+          );
+        }
       } else {
         data.tokensByHash.set(tokenHash, token);
         await data.storage.append(token);
@@ -149,7 +159,7 @@ const provideHandleTransaction = (
 };
 
 export default {
-  initialize: provideInitialize(data, botUtils, botConfig, isDevelopment),
+  initialize: provideInitialize(data, popularTokens, botUtils, botConfig, isDevelopment),
   handleTransaction: provideHandleTransaction(data, botUtils),
 
   provideInitialize,

@@ -1,9 +1,10 @@
 import { EntityType, Finding, FindingSeverity, FindingType } from 'forta-agent';
 import { Token } from './types';
 
-export const createImpersonatedTokenFinding = (
+const createFinding = (
   newToken: Token,
   oldToken: Token,
+  severity: FindingSeverity,
   anomalyScore: number,
 ) => {
   const writeName = (token: Token) => {
@@ -23,12 +24,13 @@ export const createImpersonatedTokenFinding = (
       `${newToken.deployer} deployed an impersonating token contract at ${newToken.address}. ` +
       `It impersonates token ${writeName(oldToken)} at ${oldToken.address}`,
     type: FindingType.Suspicious,
-    severity: FindingSeverity.Medium,
+    severity: severity,
     addresses: [newToken.deployer, oldToken.deployer, newToken.address, oldToken.address],
     labels: [
       {
         entityType: EntityType.Address,
         label: 'Victim',
+        metadata: {},
         entity: oldToken.deployer,
         confidence: 0.5,
         remove: false,
@@ -38,6 +40,7 @@ export const createImpersonatedTokenFinding = (
         label: 'Victim',
         entity: oldToken.address,
         confidence: 0.5,
+        metadata: {},
         remove: false,
       },
       {
@@ -45,6 +48,7 @@ export const createImpersonatedTokenFinding = (
         label: 'Scam',
         entity: newToken.address,
         confidence: 0.5,
+        metadata: {},
         remove: false,
       },
       {
@@ -52,11 +56,28 @@ export const createImpersonatedTokenFinding = (
         label: 'Scammer',
         entity: newToken.deployer,
         confidence: 0.5,
+        metadata: {},
         remove: false,
       },
     ],
     metadata: {
-      anomaly_score: String(anomalyScore),
+      anomalyScore: String(anomalyScore),
     },
   });
+};
+
+export const createFindingMediumSeverity = (
+  newToken: Token,
+  oldToken: Token,
+  anomalyScore: number,
+) => {
+  return createFinding(newToken, oldToken, FindingSeverity.Low, anomalyScore);
+};
+
+export const createFindingHighSeverity = (
+  newToken: Token,
+  oldToken: Token,
+  anomalyScore: number,
+) => {
+  return createFinding(newToken, oldToken, FindingSeverity.Medium, anomalyScore);
 };
