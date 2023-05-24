@@ -45,11 +45,33 @@ By default, the bot ignores the deployment of Uniswap tokens:
 ## Alerts
 
 - IMPERSONATED-TOKEN-DEPLOYMENT
-  - Fired when someone deployed an impersonating token with a similar symbol, name and interface
-  - Severity is:
-    - "high" when the token impersonates a popular token
-    - "medium" when the token impersonates a regular token
+
+  - Fired when someone deployed an impersonating token
+  - Severity is always "medium"
   - Type is always set to "suspicious"
+  - Metadata:
+    - `newTokenSymbol`: symbol of the deployed token
+    - `newTokenName`: name of the deployed token
+    - `oldTokenSymbol`: symbol of the original token
+    - `oldTokenName`: name of the original token
+    - `newTokenDeployer`: address that deployed a contract that impersonates another token
+    - `newTokenContract`: address of the contract that impersonates another token
+    - `oldTokenDeployer`: address that deployed the original token
+    - `oldTokenContract`: address of the original token contract
+
+- IMPERSONATED-TOKEN-DEPLOYMENT-POPULAR
+  - Fired when someone deployed a contract that impersonates a popular token
+  - Severity is always "high"
+  - Type is always set to "suspicious"
+  - Metadata:
+    - `newTokenSymbol`: symbol of the deployed token
+    - `newTokenName`: name of the deployed token
+    - `oldTokenSymbol`: symbol of the original token
+    - `oldTokenName`: name of the original token
+    - `newTokenDeployer`: address that deployed a contract that impersonates another token
+    - `newTokenContract`: address of the contract that impersonates another token
+    - `oldTokenDeployer`: address that deployed the original token
+    - `oldTokenContract`: address of the original token contract
 
 ## Test Data
 

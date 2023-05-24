@@ -1,7 +1,11 @@
 import { EntityType, Finding, FindingSeverity, FindingType } from 'forta-agent';
 import { Token } from './types';
 
+const HIGH_SEVERITY_ALERT_ID = 'IMPERSONATED-TOKEN-DEPLOYMENT-POPULAR';
+const MEDIUM_SEVERITY_ALERT_ID = 'IMPERSONATED-TOKEN-DEPLOYMENT';
+
 const createFinding = (
+  alertId: string,
   newToken: Token,
   oldToken: Token,
   severity: FindingSeverity,
@@ -18,7 +22,7 @@ const createFinding = (
   };
 
   return Finding.from({
-    alertId: 'IMPERSONATED-TOKEN-DEPLOYMENT',
+    alertId: alertId,
     name: 'Impersonating Token Contract',
     description:
       `${newToken.deployer} deployed an impersonating token contract at ${newToken.address}. ` +
@@ -61,6 +65,14 @@ const createFinding = (
       },
     ],
     metadata: {
+      newTokenSymbol: newToken.symbol || '',
+      newTokenName: newToken.name || '',
+      oldTokenSymbol: oldToken.symbol || '',
+      oldTokenName: oldToken.name || '',
+      newTokenDeployer: newToken.deployer,
+      newTokenContract: newToken.address,
+      oldTokenDeployer: oldToken.deployer,
+      oldTokenContract: oldToken.address,
       anomalyScore: String(anomalyScore),
     },
   });
@@ -71,7 +83,13 @@ export const createFindingMediumSeverity = (
   oldToken: Token,
   anomalyScore: number,
 ) => {
-  return createFinding(newToken, oldToken, FindingSeverity.Low, anomalyScore);
+  return createFinding(
+    MEDIUM_SEVERITY_ALERT_ID,
+    newToken,
+    oldToken,
+    FindingSeverity.Medium,
+    anomalyScore,
+  );
 };
 
 export const createFindingHighSeverity = (
@@ -79,5 +97,11 @@ export const createFindingHighSeverity = (
   oldToken: Token,
   anomalyScore: number,
 ) => {
-  return createFinding(newToken, oldToken, FindingSeverity.Medium, anomalyScore);
+  return createFinding(
+    HIGH_SEVERITY_ALERT_ID,
+    newToken,
+    oldToken,
+    FindingSeverity.High,
+    anomalyScore,
+  );
 };
